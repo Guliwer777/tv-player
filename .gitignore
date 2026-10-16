@@ -1,0 +1,11 @@
+/research/
+/player/
+/dist/
+/addon/globalPlugins/tvpVod/bin/
+__pycache__/
+*.py[cod]
+*.nvda-addon
+*.log
+.env
+*.dat
+tvpVod.json
