@@ -9,7 +9,7 @@
     status.textContent='Błąd odtwarzacza: '+code;
     const detail=String(error?.message||'').replace(/https?:\/\/\S+/g,'[adres]').slice(0,250);
     const type=code===1003?error?.data?.[1]:error?.data?.[2];
-    send({event:error?.severity===1?'player-notice':'player-error',message:'Odtwarzacz TVP VOD: '+code+(Number.isInteger(type)?' (żądanie '+type+')':'')+(detail?' — '+detail:'')});
+    send({event:error?.severity===1?'player-notice':'player-error',message:'Odtwarzacz TVP Player: '+code+(Number.isInteger(type)?' (żądanie '+type+')':'')+(detail?' — '+detail:'')});
   }
   function audioList() {
     const raw=typeof player.getAudioTracks==='function'?player.getAudioTracks():[];

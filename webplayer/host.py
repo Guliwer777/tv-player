@@ -27,7 +27,7 @@ def emit(value):
 
 class Host(wx.Frame):
     def __init__(self, options):
-        super().__init__(None, title='TVP VOD — odtwarzacz',
+        super().__init__(None, title='TVP Player — odtwarzacz',
                          style=wx.NO_BORDER if options.parent else wx.DEFAULT_FRAME_STYLE,
                          size=(900,650))
         self.closed = False

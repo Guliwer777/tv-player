@@ -6,7 +6,7 @@ import tvp_account
 
 class PairDialog(wx.Dialog):
     def __init__(self,parent=None):
-        super().__init__(parent,title='TVP VOD — wpisz kod łączenia konta')
+        super().__init__(parent,title='TVP Player — wpisz kod łączenia konta')
         self.busy=False
         layout=wx.BoxSizer(wx.VERTICAL)
         layout.Add(wx.StaticText(self,label='Wpisz kod wyświetlony przez TVP po zalogowaniu:'),0,wx.ALL,12)
@@ -38,8 +38,8 @@ class PairDialog(wx.Dialog):
         self.busy=False
         if error:
             self.connect.Enable();self.FindWindow(wx.ID_CANCEL).Enable()
-            wx.MessageBox(error,'TVP VOD',wx.OK|wx.ICON_ERROR,parent=self);self.code.SetFocus()
+            wx.MessageBox(error,'TVP Player',wx.OK|wx.ICON_ERROR,parent=self);self.code.SetFocus()
         else:
             self.code.Clear()
-            wx.MessageBox('Konto połączone. Możesz uruchomić materiał we wtyczce.','TVP VOD',wx.OK|wx.ICON_INFORMATION,parent=self)
+            wx.MessageBox('Konto połączone. Możesz uruchomić materiał we wtyczce.','TVP Player',wx.OK|wx.ICON_INFORMATION,parent=self)
             self.EndModal(wx.ID_OK)

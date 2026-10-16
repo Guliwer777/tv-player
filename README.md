@@ -1,6 +1,6 @@
-# tvpvod — dodatek do NVDA
+# TVP Player — dodatek do NVDA
 
-Autor: **Guliwer**. Wersja testowa: **0.13.0-dev**.
+Autor: **Guliwer**. Wersja testowa: **0.13.1-dev**.
 
 Dostępny z klawiatury katalog TVP VOD, wyszukiwanie, filmy, seriale i odcinki,
 telewizja na żywo oraz transmisje TVP Sport. Odtwarzacz oferuje przewijanie,
@@ -9,7 +9,7 @@ Projekt niezależny, nie jest oficjalnym produktem Telewizji Polskiej.
 
 ## Instalacja
 
-Pobierz `tvpvod.nvda-addon` z sekcji Releases, otwórz plik i zatwierdź instalację
+Pobierz `tvpplayer.nvda-addon` z sekcji Releases, otwórz plik i zatwierdź instalację
 w NVDA. Następnie uruchom NVDA ponownie. Wymagane: Windows 10/11, NVDA 2025.1
 lub nowszy; manifest deklaruje zgodność do NVDA 2026.2. Odtwarzacz dołączono do
 paczki; mpv nie jest wymagany. Microsoft Edge WebView2 Runtime jest osobną
@@ -57,3 +57,7 @@ Kod dodatku jest udostępniany na licencji GPL-2.0-or-later (plik LICENSE).
 Biblioteki zewnętrzne zachowują swoje licencje w katalogach `licenses` i `vendor`.
 [Historia i starsze ustalenia](docs/HISTORIA.md) opisują również wcześniejsze,
 zastąpione rozwiązania; aktualna instrukcja znajduje się powyżej.
+
+Nazwa TVP Player zastępuje tvpvod. Wewnętrzny identyfikator `tvpVod` i nazwy
+plików danych pozostają zgodne z wcześniejszymi wersjami; instalacja aktualizuje
+istniejący dodatek, zachowując ustawienia, zakładki, ulubione i sesję konta.

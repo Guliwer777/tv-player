@@ -8,7 +8,7 @@ import wx
 import ui
 
 def open_account(parent):
-    with wx.SingleChoiceDialog(parent,'Wybierz czynność:','TVP VOD — konto',[
+    with wx.SingleChoiceDialog(parent,'Wybierz czynność:','TVP Player — konto',[
         'Otwórz oficjalny formularz logowania TVP','Mam już kod — połącz konto','Odłącz konto od wtyczki']) as dialog:
         if dialog.ShowModal()!=wx.ID_OK:return
         choice=dialog.GetSelection()

@@ -28,7 +28,7 @@ def spoken_time(position, duration):
     return elapsed + ". Czas trwania materiału jest nieznany."
 
 
-HELP = """TVP VOD — skróty klawiaturowe
+HELP = """TVP Player — skróty klawiaturowe
 
 Konto TVP VOD — logowanie i odłączanie: otwiera oficjalny formularz TVP w osobnym oknie dodatku. Login i hasło wpisz na stronie TVP.
 Po zalogowaniu przepisz wyświetlony przez TVP kod do pola „Kod ze strony TVP” i wybierz „Połącz konto”. F6 przełącza stronę i pole kodu.
@@ -46,7 +46,7 @@ Ulubione w menu głównym: Enter otwiera pozycję, Delete usuwa ją z ulubionych
 Ulubione są zapisywane lokalnie w tvpVod.json, razem z ustawieniami i zakładkami; nie synchronizują się z kontem TVP.
 NVDA+Shift+V raz — włącz tryb poleceń, także z innej aplikacji.
 W ustawieniach wybierz sygnalizację trybu poleceń: komunikaty głosowe, dźwięki albo brak powiadomień.
-Komunikaty: „Tryb poleceń TVP VOD aktywny” i „Anulowano tryb poleceń TVP VOD”.
+Komunikaty: „Tryb poleceń TVP Player aktywny” i „Anulowano tryb poleceń TVP Player”.
 Dźwięki: wyższy przy włączeniu, niższy przy wyłączeniu.
 NVDA+Shift+V dwa razy szybko — otwórz dodatek lub przywołaj odtwarzacz.
 NVDA+Shift+V, potem Ctrl+Spacja — pauza/wznów; bez aktywnego odtwarzacza wznawia ostatni zapisany materiał.
@@ -137,7 +137,7 @@ def route_player_shortcut(parent, event):
                 cursor.resume_last()
             else:
                 import ui
-                ui.message("Brak aktywnego odtwarzacza TVP VOD.")
+                ui.message("Brak aktywnego odtwarzacza TVP Player.")
             return True
         cursor = cursor.GetParent()
     return False
@@ -145,10 +145,10 @@ def route_player_shortcut(parent, event):
 
 def show_help(parent):
     import wx
-    dialog = wx.Dialog(parent, title="TVP VOD — skróty klawiaturowe", size=(720, 560))
+    dialog = wx.Dialog(parent, title="TVP Player — skróty klawiaturowe", size=(720, 560))
     layout = wx.BoxSizer(wx.VERTICAL)
     text = wx.TextCtrl(dialog, value=HELP, style=wx.TE_MULTILINE | wx.TE_READONLY,
-                       name="Skróty klawiaturowe TVP VOD")
+                       name="Skróty klawiaturowe TVP Player")
     layout.Add(text, 1, wx.EXPAND | wx.ALL, 8)
     layout.Add(dialog.CreateButtonSizer(wx.OK), 0, wx.ALL | wx.ALIGN_RIGHT, 8)
     dialog.SetSizer(layout)

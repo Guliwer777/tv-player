@@ -5,7 +5,7 @@ from .accessibility import route_player_shortcut
 
 class SettingsDialog(wx.Dialog):
     def __init__(self, parent, settings):
-        super().__init__(parent, title="TVP VOD — ustawienia")
+        super().__init__(parent, title="TVP Player — ustawienia")
         layout = wx.BoxSizer(wx.VERTICAL)
         layout.Add(wx.StaticText(self, label="Po zakończeniu odcinka:"), 0, wx.ALL, 8)
         self.after_end = wx.Choice(self, choices=["Zatrzymaj", "Odtwórz następny odcinek"])

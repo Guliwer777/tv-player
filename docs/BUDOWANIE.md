@@ -10,7 +10,7 @@ python -m unittest discover -s tests -p "test_*.py"
 python build.py
 ```
 
-Wynik: `dist/tvpvod.nvda-addon`. Zamknij uruchomione procesy odtwarzacza
+Wynik: `dist/tvpplayer.nvda-addon`. Zamknij uruchomione procesy odtwarzacza
 przed budowaniem, aby nie blokowały podmiany bibliotek. Dołączony Shaka Player
 jest w `webplayer/vendor`; informacje licencyjne w `addon/globalPlugins/tvpVod/licenses`.
 Pliki binarne są budowane lokalnie i nie trafiają do historii Git. Gotową paczkę

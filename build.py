@@ -3,7 +3,7 @@ from pathlib import Path
 from zipfile import ZipFile, ZIP_DEFLATED
 
 root = Path(__file__).resolve().parent
-output = root / "dist" / "tvpvod.nvda-addon"
+output = root / "dist" / "tvpplayer.nvda-addon"
 output.parent.mkdir(exist_ok=True)
 with ZipFile(output, "w", ZIP_DEFLATED) as archive:
     for path in sorted((root / "addon").rglob("*")):

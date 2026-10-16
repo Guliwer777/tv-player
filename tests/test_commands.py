@@ -92,7 +92,7 @@ class CommandTests(unittest.TestCase):
         for choice in ('speech','sound','none'):
             plugin.dialog.store.settings['commandFeedback']=choice
             notify(plugin,True);notify(plugin,False)
-        self.assertEqual(spoken,['Tryb poleceń TVP VOD aktywny','Anulowano tryb poleceń TVP VOD'])
+        self.assertEqual(spoken,['Tryb poleceń TVP Player aktywny','Anulowano tryb poleceń TVP Player'])
         self.assertEqual(sounds,[(880,80),(440,80)])
 
     def test_multiple_commands_remain_consumed_until_cancelled(self):

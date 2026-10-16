@@ -8,7 +8,7 @@ import tvp_account
 
 class AccountHost(wx.Frame):
     def __init__(self):
-        super().__init__(None,title='TVP VOD — logowanie do konta',size=(950,780))
+        super().__init__(None,title='TVP Player — logowanie do konta',size=(950,780))
         self.device=uuid.uuid4().hex
         self.busy=False;self.closed=False
         layout=wx.BoxSizer(wx.VERTICAL)
@@ -52,7 +52,7 @@ class AccountHost(wx.Frame):
         if self.busy:return
         code=self.code.GetValue().strip()
         if not code:
-            wx.MessageBox('Po zalogowaniu wpisz kod ze strony TVP.','TVP VOD',wx.OK|wx.ICON_INFORMATION,parent=self);self.code.SetFocus();return
+            wx.MessageBox('Po zalogowaniu wpisz kod ze strony TVP.','TVP Player',wx.OK|wx.ICON_INFORMATION,parent=self);self.code.SetFocus();return
         self.busy=True;self.connect.Disable()
         def worker():
             try:tvp_account.pair(code,self.device);message='Konto połączone. Możesz zamknąć to okno i uruchomić materiał we wtyczce.';success=True
@@ -64,17 +64,17 @@ class AccountHost(wx.Frame):
         if self.closed:return
         self.busy=False;self.connect.Enable()
         if success:self.code.Clear()
-        wx.MessageBox(message,'TVP VOD — konto',wx.OK|(wx.ICON_INFORMATION if success else wx.ICON_ERROR),parent=self)
+        wx.MessageBox(message,'TVP Player — konto',wx.OK|(wx.ICON_INFORMATION if success else wx.ICON_ERROR),parent=self)
 
     def disconnect(self,event):
         if self.busy:return
         path=tvp_account.account_path()
         try:
             if path and path.exists():path.unlink()
-            wx.MessageBox('Odłączono konto od wtyczki. Sesję na stronie TVP możesz zakończyć osobno w jej formularzu.','TVP VOD',wx.OK|wx.ICON_INFORMATION,parent=self)
-        except OSError:wx.MessageBox('Nie udało się odłączyć konta.','TVP VOD',wx.OK|wx.ICON_ERROR,parent=self)
+            wx.MessageBox('Odłączono konto od wtyczki. Sesję na stronie TVP możesz zakończyć osobno w jej formularzu.','TVP Player',wx.OK|wx.ICON_INFORMATION,parent=self)
+        except OSError:wx.MessageBox('Nie udało się odłączyć konta.','TVP Player',wx.OK|wx.ICON_ERROR,parent=self)
 
     def close(self,event):
         if self.busy:
-            wx.MessageBox('Trwa łączenie konta. Poczekaj na wynik.','TVP VOD',wx.OK|wx.ICON_INFORMATION,parent=self);return
+            wx.MessageBox('Trwa łączenie konta. Poczekaj na wynik.','TVP Player',wx.OK|wx.ICON_INFORMATION,parent=self);return
         self.closed=True;self.Destroy()

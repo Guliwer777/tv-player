@@ -59,7 +59,7 @@ class NamedSlider(wx.Slider):
 class PlaybackDialog(wx.Dialog):
     def __init__(self, parent, material, *, store=None, on_bookmark=None, resume_at=None,
                  on_progress=None, on_stopped=None):
-        super().__init__(parent, title="TVP VOD — " + material.title, size=(800, 600))
+        super().__init__(parent, title="TVP Player — " + material.title, size=(800, 600))
         self.alive = True
         self.player = None
         self.material = material
@@ -90,7 +90,7 @@ class PlaybackDialog(wx.Dialog):
         self.video.SetName("Obraz materiału")
         self.video.SetBackgroundColour(wx.BLACK)
         layout.Add(self.video, 1, wx.EXPAND)
-        self.status = wx.StaticText(self, label="Łączenie z TVP VOD…")
+        self.status = wx.StaticText(self, label="Łączenie z TVP Player…")
         layout.Add(self.status, 0, wx.ALL, 8)
         self.pause = wx.Button(self, label="&Pauza / wznów")
         layout.Add(self.pause, 0, wx.ALL, 5)
@@ -426,7 +426,7 @@ class PlaybackDialog(wx.Dialog):
 
     def on_close(self, event):
         self.hide_to_background()
-        ui.message("Odtwarzacz TVP VOD działa w tle.")
+        ui.message("Odtwarzacz TVP Player działa w tle.")
 
     def stop_playback(self, notify=True):
         if not self.alive:

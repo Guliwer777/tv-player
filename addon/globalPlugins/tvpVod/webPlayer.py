@@ -72,7 +72,7 @@ class WebPlayer:
             pass
         finally:
             if not self.closed.is_set() and not failure_reported:
-                self.on_event({'event':'player-error','message':'Odtwarzacz TVP VOD został zamknięty. Otwórz materiał ponownie.'})
+                self.on_event({'event':'player-error','message':'Odtwarzacz TVP Player został zamknięty. Otwórz materiał ponownie.'})
             self.close()
             self.process.stdout.close()
 

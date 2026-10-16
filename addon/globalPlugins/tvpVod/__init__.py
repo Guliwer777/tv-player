@@ -21,7 +21,7 @@ from .commands import CommandMode, action_from_event
 
 class CatalogDialog(wx.Dialog):
     def __init__(self, parent):
-        super().__init__(parent, title="TVP VOD", size=(700, 540))
+        super().__init__(parent, title="TVP Player", size=(700, 540))
         self.alive = True
         self.results = []
         self.generation = 0
@@ -32,10 +32,10 @@ class CatalogDialog(wx.Dialog):
         self.offset = 0
         self.history = []
         self.playback = None
-        self.heading = "TVP VOD"
+        self.heading = "TVP Player"
         self.store = Store(Path(globalVars.appArgs.configPath) / "tvpVod.json")
         layout = wx.BoxSizer(wx.VERTICAL)
-        self.location = wx.StaticText(self, label="TVP VOD")
+        self.location = wx.StaticText(self, label="TVP Player")
         layout.Add(self.location, 0, wx.ALL, 8)
         self.list = wx.ListBox(self, name="Kategorie i materiały")
         layout.Add(self.list, 2, wx.EXPAND | wx.ALL, 8)
@@ -61,7 +61,7 @@ class CatalogDialog(wx.Dialog):
     def go_home(self):
         self.generation += 1
         self.history = []
-        self.current_folder, self.offset, self.heading = None, 0, "TVP VOD"
+        self.current_folder, self.offset, self.heading = None, 0, "TVP Player"
         self.set_items(self.home_items)
 
     def set_items(self, results, selection=0):
@@ -69,7 +69,7 @@ class CatalogDialog(wx.Dialog):
         self.list.Set([self.item_label(item) for item in results])
         self.list.SetName(self.heading)
         self.location.SetLabel(self.heading)
-        self.SetTitle("TVP VOD — " + self.heading if self.heading != "TVP VOD" else self.heading)
+        self.SetTitle("TVP Player — " + self.heading if self.heading != "TVP Player" else self.heading)
         self.description.Clear()
         if results:
             self.list.SetSelection(min(max(0, selection), len(results) - 1))
@@ -102,7 +102,7 @@ class CatalogDialog(wx.Dialog):
             elif action == "pause":
                 self.resume_last()
             else:
-                ui.message("Brak aktywnego odtwarzacza TVP VOD.")
+                ui.message("Brak aktywnego odtwarzacza TVP Player.")
         elif key == wx.WXK_F1:
             show_help(self)
         elif key == wx.WXK_F5 and self.current_folder and self.current_folder.kind=='SPORT':
@@ -162,7 +162,7 @@ class CatalogDialog(wx.Dialog):
             elif item.action == "resume":
                 self.resume_last()
             elif item.action == "about":
-                gui.messageBox("TVP VOD dla NVDA\nNiezależny dodatek, nie jest produktem TVP.",
+                gui.messageBox("TVP Player dla NVDA\nAutor: Guliwer\nNiezależny dodatek, nie jest produktem TVP.",
                                "O dodatku", wx.OK | wx.ICON_INFORMATION)
             elif item.action == "quit":
                 self.shutdown()
@@ -356,7 +356,7 @@ class CatalogDialog(wx.Dialog):
             ui.message(self.heading)
 
     def on_search(self):
-        with wx.TextEntryDialog(self, "Wpisz szukany tytuł (co najmniej dwa znaki):", "TVP VOD — Wyszukaj") as dialog:
+        with wx.TextEntryDialog(self, "Wpisz szukany tytuł (co najmniej dwa znaki):", "TVP Player — Wyszukaj") as dialog:
             dialog.Bind(wx.EVT_CHAR_HOOK, lambda event: None if route_player_shortcut(self, event) else event.Skip())
             if dialog.ShowModal() != wx.ID_OK:
                 self.list.SetFocus()
@@ -402,7 +402,7 @@ class CatalogDialog(wx.Dialog):
         self.Hide()
         if self.playback and self.playback.alive:
             self.playback.hide_to_background()
-        ui.message("TVP VOD działa w tle.")
+        ui.message("TVP Player działa w tle.")
 
     def shutdown(self):
         self.alive = False
@@ -414,7 +414,7 @@ class CatalogDialog(wx.Dialog):
 
 
 class GlobalPlugin(globalPluginHandler.GlobalPlugin):
-    scriptCategory = "TVP VOD"
+    scriptCategory = "TVP Player"
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -428,7 +428,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
             self.command_timer.Start(200)
             inputCore.decide_executeGesture.register(self.intercept_command)
             self.menu = gui.mainFrame.sysTrayIcon.toolsMenu
-            self.menu_item = self.menu.Append(wx.ID_ANY, "TVP VOD…")
+            self.menu_item = self.menu.Append(wx.ID_ANY, "TVP Player…")
             gui.mainFrame.sysTrayIcon.Bind(wx.EVT_MENU, self.show_dialog, self.menu_item)
             threading.Thread(target=self.prepare_runtime,daemon=True).start()
 
@@ -448,7 +448,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
         except (OSError, ValueError, TypeError):
             return 5
 
-    @script(description="Jedno naciśnięcie: tryb poleceń TVP VOD według ustawień. Dwa: otwórz okno.", gesture="kb:NVDA+shift+v")
+    @script(description="Jedno naciśnięcie: tryb poleceń TVP Player według ustawień. Dwa: otwórz okno.", gesture="kb:NVDA+shift+v")
     def script_openCatalog(self, gesture):
         if not globalVars.appArgs.secure:
             if getLastScriptRepeatCount() == 1 and self.command_mode.armed:
@@ -466,7 +466,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
         except (OSError, ValueError, TypeError):
             feedback = "speech"
         if feedback == "speech":
-            ui.message("Tryb poleceń TVP VOD aktywny" if active else "Anulowano tryb poleceń TVP VOD")
+            ui.message("Tryb poleceń TVP Player aktywny" if active else "Anulowano tryb poleceń TVP Player")
         elif feedback == "sound":
             tones.beep(880 if active else 440, 80)
 
@@ -493,7 +493,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
                 self.dialog = CatalogDialog(gui.mainFrame)
             self.dialog.resume_last(background=True)
         else:
-            ui.message("Brak aktywnego odtwarzacza TVP VOD. Naciśnij NVDA+Shift+V dwukrotnie, aby otworzyć okno.")
+            ui.message("Brak aktywnego odtwarzacza TVP Player. Naciśnij NVDA+Shift+V dwukrotnie, aby otworzyć okno.")
 
     def show_dialog(self, event=None):
         if self.dialog and self.dialog.alive:
@@ -512,8 +512,8 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
                 self.dialog.Show()
                 self.dialog.list.SetFocus()
             except (OSError, ValueError, TypeError) as error:
-                gui.messageBox("Nie udało się odczytać ustawień lub zakładek TVP VOD. Plik zachowano. " + str(error),
-                               "TVP VOD", wx.OK | wx.ICON_ERROR)
+                gui.messageBox("Nie udało się odczytać ustawień lub zakładek TVP Player. Plik zachowano. " + str(error),
+                               "TVP Player", wx.OK | wx.ICON_ERROR)
         finally:
             gui.mainFrame.postPopup()
 
