@@ -1,11 +1,14 @@
 import wx
 from .state import SEEK_STEPS, QUALITY_CHOICES, COMMAND_FEEDBACK_CHOICES, COMMAND_TIMEOUT_CHOICES
+from .programmeFormat import ORDERS,DEFAULT,REPLAY_SIGNALS
 from .accessibility import route_player_shortcut
 
 
 class SettingsDialog(wx.Dialog):
     def __init__(self, parent, settings):
-        super().__init__(parent, title="TVP Player — ustawienia")
+        super().__init__(parent, title="TV Player — ustawienia")
+        self.login_browser=settings.get('loginBrowser','edge')
+        self.original_settings=dict(settings)
         layout = wx.BoxSizer(wx.VERTICAL)
         layout.Add(wx.StaticText(self, label="Po zakończeniu odcinka:"), 0, wx.ALL, 8)
         self.after_end = wx.Choice(self, choices=["Zatrzymaj", "Odtwórz następny odcinek"])
@@ -34,13 +37,22 @@ class SettingsDialog(wx.Dialog):
         self.command_timeout = wx.Choice(self, choices=[label for key,label in COMMAND_TIMEOUT_CHOICES], name="Automatyczne wyłączanie trybu poleceń")
         self.command_timeout.SetSelection([key for key,label in COMMAND_TIMEOUT_CHOICES].index(settings.get("commandTimeout", 5)))
         layout.Add(self.command_timeout, 0, wx.EXPAND | wx.ALL, 8)
+        layout.Add(wx.StaticText(self,label='Kolejność informacji o audycji:'),0,wx.ALL,8)
+        self.programme_order=wx.Choice(self,choices=[label for key,label in ORDERS],name='Kolejność informacji o audycji')
+        self.programme_order.SetSelection([key for key,label in ORDERS].index(settings.get('programmeOrder',DEFAULT)))
+        layout.Add(self.programme_order,0,wx.EXPAND|wx.ALL,8)
+        layout.Add(wx.StaticText(self,label='Informacja o możliwości cofania kanału:'),0,wx.ALL,8)
+        self.replay_signal=wx.Choice(self,choices=[label for key,label in REPLAY_SIGNALS],name='Informacja o możliwości cofania kanału')
+        self.replay_signal.SetSelection([key for key,label in REPLAY_SIGNALS].index(settings.get('replaySignal','sound')))
+        layout.Add(self.replay_signal,0,wx.EXPAND|wx.ALL,8)
         layout.Add(self.CreateButtonSizer(wx.OK | wx.CANCEL), 0, wx.ALL | wx.ALIGN_RIGHT, 8)
         self.SetSizerAndFit(layout)
         self.Bind(wx.EVT_CHAR_HOOK, lambda event: None if route_player_shortcut(parent, event) else event.Skip())
 
     def values(self):
-        return {"afterEnd": "next" if self.after_end.GetSelection() == 1 else "stop",
+        return {**self.original_settings,"replaySignal":REPLAY_SIGNALS[self.replay_signal.GetSelection()][0],"programmeOrder":ORDERS[self.programme_order.GetSelection()][0],"afterEnd": "next" if self.after_end.GetSelection() == 1 else "stop",
                 "seekStep": SEEK_STEPS[self.step.GetSelection()], "volume": self.volume.GetValue(),
                 "resumePaused": self.paused.GetValue(), "quality": QUALITY_CHOICES[self.quality.GetSelection()][0],
                 "commandFeedback": COMMAND_FEEDBACK_CHOICES[self.command_feedback.GetSelection()][0],
-                "commandTimeout": COMMAND_TIMEOUT_CHOICES[self.command_timeout.GetSelection()][0]}
+                "commandTimeout": COMMAND_TIMEOUT_CHOICES[self.command_timeout.GetSelection()][0],
+                "loginBrowser":self.login_browser}

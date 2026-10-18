@@ -78,6 +78,27 @@ class OfficialSource:
 
 
 def resolve(material, *, allow_drm=False, web=False):
+    if material.kind in ('PLAYERPL','PLAYERPL_LIVE'):
+        from .playerpl import official_url
+        if not official_url(material.url):raise CatalogError('Niepoprawny adres materiału Playera.')
+        return OfficialSource(material.url,'LIVE' if material.kind=='PLAYERPL_LIVE' else 'MOVIE')
+    if material.kind.startswith('POLSAT'):
+        from .polsat import check_access,official_url
+        from .polsat_api import PolsatError
+        if not official_url(material.url):raise CatalogError('Niepoprawny adres Polsat Box Go.')
+        url=material.url
+        try:
+            check_access(material)
+            from urllib.parse import parse_qs,urlsplit
+            if material.kind=='POLSAT_LIVE' and parse_qs(urlsplit(url).query).get('tvpStartOver'):
+                from .polsat import timeline_origin
+                url+='&tvpTimelineOrigin='+str(timeline_origin(material))
+        except PolsatError as exc:raise CatalogError(str(exc)) from None
+        return OfficialSource(url,'LIVE' if material.kind=='POLSAT_LIVE' else 'MOVIE')
+    if material.kind in ("CANAL","CANAL_LIVE"):
+        from .canal import official_url
+        if not official_url(material.url):raise CatalogError("Niepoprawny adres materiału CANAL+.")
+        return OfficialSource(material.url)
     from .sport_api import sport_url,playlist as sport_playlist
     if sport_url(material.url):
         from urllib.parse import urlsplit

@@ -12,5 +12,5 @@ def browse(folder):
     events=[item for item in events if item['active']==(folder.resource=='now')]
     materials=[Material(item['id'],('Na żywo — ' if item['active'] else 'Zaplanowane — ')+sport_api.local_time(item['start'])+' — '+item['title'],
         item['discipline']+'. Początek: '+sport_api.local_time(item['start'])+'. Koniec planowany: '+sport_api.local_time(item['end'])+'. F5 odświeża listę. Dostępność potwierdza serwer przy odtwarzaniu.',
-        item['url'],'LIVE',False) for item in events]
+        item['url'],'LIVE',False,start=item['start'],end=item['end']) for item in events]
     return materials,False

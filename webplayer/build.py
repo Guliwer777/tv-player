@@ -12,6 +12,10 @@ subprocess.run([sys.executable,'-m','PyInstaller','--noconfirm','--clean','--one
     '--name','tvpWebPlayer','--distpath',str(root/'research/webplayer-dist'),
     '--workpath',str(root/'research/webplayer-build'),'--specpath',str(root/'research'),
     '--add-data',str(root/'webplayer/bridge.js')+os.pathsep+'.',
+    '--add-data',str(root/'webplayer/canal_bridge.js')+os.pathsep+'.',
+    '--add-data',str(root/'webplayer/polsat_bridge.js')+os.pathsep+'.',
+    '--add-data',str(root/'webplayer/playerpl_bridge.js')+os.pathsep+'.',
+    '--add-data',str(root/'webplayer/audio_hooks.js')+os.pathsep+'.',
     '--add-data',str(root/'webplayer/index.html')+os.pathsep+'.',
     '--add-data',str(root/'webplayer/direct.js')+os.pathsep+'.',
     '--add-data',str(root/'webplayer/bootstrap.js')+os.pathsep+'.',
@@ -20,4 +24,5 @@ subprocess.run([sys.executable,'-m','PyInstaller','--noconfirm','--clean','--one
     '--paths',str(root/'addon/globalPlugins/tvpVod'),
     '--paths',str(root/'research/gui-deps'),str(root/'webplayer/host.py')],
     cwd=root,env=env,check=True)
-shutil.copytree(root/'research/webplayer-dist/tvpWebPlayer',root/'addon/globalPlugins/tvpVod/bin',dirs_exist_ok=True)
+if '--stage-only' not in sys.argv:
+    shutil.copytree(root/'research/webplayer-dist/tvpWebPlayer',root/'addon/globalPlugins/tvpVod/bin',dirs_exist_ok=True)

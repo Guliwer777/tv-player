@@ -58,11 +58,14 @@ class NamedSlider(wx.Slider):
 
 class PlaybackDialog(wx.Dialog):
     def __init__(self, parent, material, *, store=None, on_bookmark=None, resume_at=None,
-                 on_progress=None, on_stopped=None):
-        super().__init__(parent, title="TVP Player — " + material.title, size=(800, 600))
+                 on_progress=None, on_stopped=None, live_start=None, display_title=None):
+        super().__init__(parent, title="TV Player — " + (display_title or material.title), size=(800, 600))
+        self.display_title=display_title or material.title
         self.alive = True
         self.player = None
         self.material = material
+        self.live_start=live_start
+        self.Bind(wx.EVT_CONTEXT_MENU,self.context_menu)
         self.store = store
         self.on_bookmark = on_bookmark
         self.on_progress = on_progress
@@ -75,6 +78,7 @@ class PlaybackDialog(wx.Dialog):
         self.next_requested = False
         self.finished = False
         self.loaded = False
+        self.image_visible=False
         self.pending_bookmark = False
         self.paused_state = None
         self.seek_step = self.settings["seekStep"]
@@ -90,32 +94,39 @@ class PlaybackDialog(wx.Dialog):
         self.video.SetName("Obraz materiału")
         self.video.SetBackgroundColour(wx.BLACK)
         layout.Add(self.video, 1, wx.EXPAND)
-        self.status = wx.StaticText(self, label="Łączenie z TVP Player…")
+        self.status = wx.StaticText(self, label="Łączenie z TV Player…")
         layout.Add(self.status, 0, wx.ALL, 8)
-        self.pause = wx.Button(self, label="&Pauza / wznów")
+        self.pause = wx.Button(self, label="Pauza / wznów")
         layout.Add(self.pause, 0, wx.ALL, 5)
         self.pause.Bind(wx.EVT_BUTTON, lambda event: self.send("cycle", "pause"))
-        layout.Add(wx.StaticText(self, label="&Czas odtwarzania i przewijanie:"), 0, wx.LEFT, 5)
+        if material.kind in ('CANAL','CANAL_LIVE','POLSAT','POLSAT_LIVE','PLAYERPL','PLAYERPL_LIVE'):
+            self.image_button=wx.Button(self,label='Pokaż obraz')
+            self.image_button.Bind(wx.EVT_BUTTON,self.toggle_image)
+            layout.Add(self.image_button,0,wx.ALL,5)
+        layout.Add(wx.StaticText(self, label="Czas odtwarzania i przewijanie:"), 0, wx.LEFT, 5)
         self.timeline = NamedSlider(self, value=0, minValue=0, maxValue=1,
                                     name="Czas odtwarzania i przewijanie",
                                     spoken_value=lambda: self.position_text() + f". Krok przewijania: {self.seek_step} sekund.")
         self.timeline.Bind(wx.EVT_SET_FOCUS, self.on_timeline_focus)
         layout.Add(self.timeline, 0, wx.EXPAND | wx.ALL, 5)
-        layout.Add(wx.StaticText(self, label="&Głośność:"), 0, wx.LEFT, 5)
+        layout.Add(wx.StaticText(self, label="Głośność:"), 0, wx.LEFT, 5)
         self.volume = NamedSlider(self, value=self.settings["volume"], minValue=0, maxValue=100,
                                   name="Głośność", spoken_value=lambda: f"{self.volume.GetValue()} procent")
         self.volume.Bind(wx.EVT_SLIDER, lambda event: self.send("set_property", "volume", self.volume.GetValue()))
         layout.Add(self.volume, 0, wx.EXPAND | wx.ALL, 5)
-        layout.Add(wx.StaticText(self, label="Ścieżka &audio / audiodeskrypcja:"), 0, wx.LEFT, 5)
-        self.audio = wx.Button(self, label="Ścieżka &audio / audiodeskrypcja")
+        output=wx.Button(self,label='Wyjście dźwięku (Ctrl+D)')
+        output.Bind(wx.EVT_BUTTON,lambda event:self.execute_command('output'))
+        layout.Add(output,0,wx.ALL,5)
+        layout.Add(wx.StaticText(self, label="Ścieżka audio / audiodeskrypcja:"), 0, wx.LEFT, 5)
+        self.audio = wx.Button(self, label="Ścieżka audio / audiodeskrypcja")
         self.audio.SetName("Ścieżka audio / audiodeskrypcja")
         self.audio.Bind(wx.EVT_BUTTON, self.select_audio)
         layout.Add(self.audio, 0, wx.EXPAND | wx.ALL, 5)
-        self.bookmark_button = wx.Button(self, label="Utwórz &zakładkę (Ctrl+Z)")
+        self.bookmark_button = wx.Button(self, label="Utwórz zakładkę (Ctrl+Z)")
         self.bookmark_button.Disable()
         self.bookmark_button.Bind(wx.EVT_BUTTON, lambda event: self.create_bookmark())
         layout.Add(self.bookmark_button, 0, wx.ALL, 5)
-        stop = wx.Button(self, label="&Zatrzymaj i zamknij")
+        stop = wx.Button(self, label="Zatrzymaj i zamknij")
         stop.Bind(wx.EVT_BUTTON, lambda event: self.stop_playback())
         layout.Add(stop, 0, wx.ALL, 5)
         self.SetSizer(layout)
@@ -127,6 +138,24 @@ class PlaybackDialog(wx.Dialog):
     def send(self, *command):
         if self.player:
             self.player.command(*command)
+
+    def context_menu(self,event):
+        owner=self.GetParent()
+        if not hasattr(owner,'add_favorite'):return
+        menu=wx.Menu();entry=menu.Append(wx.ID_ANY,'Dodaj do ulubionych')
+        menu.Bind(wx.EVT_MENU,lambda evt:owner.add_favorite(self.material),entry)
+        try:self.PopupMenu(menu)
+        finally:menu.Destroy()
+
+    def toggle_image(self,event=None):
+        self.image_visible=not self.image_visible
+        if self.image_visible and self.player:
+            try:
+                import ctypes
+                ctypes.windll.user32.AllowSetForegroundWindow(self.player.process.pid)
+            except (OSError,AttributeError):pass
+        self.send('window-show' if self.image_visible else 'window-hide')
+        self.image_button.SetLabel('Ukryj obraz' if self.image_visible else 'Pokaż obraz')
 
     def on_key(self, event):
         key = event.GetKeyCode()
@@ -146,6 +175,8 @@ class PlaybackDialog(wx.Dialog):
         elif self.FindFocus() == self.timeline and not (event.ControlDown() or event.ShiftDown() or event.AltDown()) and key in (wx.WXK_LEFT, wx.WXK_RIGHT, wx.WXK_UP, wx.WXK_DOWN):
             self.execute_command({wx.WXK_LEFT: "back", wx.WXK_RIGHT: "forward",
                                   wx.WXK_UP: "step-up", wx.WXK_DOWN: "step-down"}[key])
+        elif self.FindFocus()==self.volume and not (event.ControlDown() or event.ShiftDown() or event.AltDown()) and key in (wx.WXK_UP,wx.WXK_DOWN):
+            self.execute_command('volume-up' if key==wx.WXK_UP else 'volume-down')
         elif action:
             self.execute_command(action)
         elif key in (wx.WXK_LEFT, wx.WXK_RIGHT, wx.WXK_UP, wx.WXK_DOWN) and self.FindFocus() != self.volume:
@@ -157,8 +188,13 @@ class PlaybackDialog(wx.Dialog):
     def execute_command(self, action):
         if not self.alive:
             return
-        if action == "help":
+        if action=='focus-player':
+            self.Show();self.Raise();self.pause.SetFocus()
+        elif action == "help":
             show_help(self)
+        elif action=='output':
+            from .audioOutput import choose
+            choose(self,self.store,self)
         elif action == "pause":
             self.send("cycle", "pause")
         elif action == "time":
@@ -203,11 +239,11 @@ class PlaybackDialog(wx.Dialog):
         if home:
             parent.go_home()
         else:
-            parent.list.SetFocus()
+            parent.restore_playback_context(self)
         parent.Raise()
 
     def announce_time(self):
-        if self.material.kind=="LIVE":
+        if self.material.kind in ("LIVE","CANAL_LIVE","POLSAT_LIVE","PLAYERPL_LIVE"):
             ui.message(self.position_text())
             return
         if self.loaded and self.player:
@@ -216,6 +252,9 @@ class PlaybackDialog(wx.Dialog):
             ui.message("Poczekaj na rozpoczęcie odtwarzania.")
 
     def create_bookmark(self):
+        if self.material.kind in ("CANAL","CANAL_LIVE","POLSAT","POLSAT_LIVE","PLAYERPL","PLAYERPL_LIVE"):
+            ui.message("Zakładki tego dostawcy będą dostępne po potwierdzeniu rozpoznawania głównego materiału.")
+            return
         if not self.loaded or not self.player:
             ui.message("Poczekaj na rozpoczęcie odtwarzania.")
             return
@@ -227,7 +266,7 @@ class PlaybackDialog(wx.Dialog):
             self.player.request_property("time-pos", 7401)
 
     def finish_episode(self):
-        if self.finished or self.material.kind == "LIVE":
+        if self.finished or self.material.kind in ("LIVE","CANAL","CANAL_LIVE","POLSAT","POLSAT_LIVE","PLAYERPL","PLAYERPL_LIVE"):
             return
         self.finished = True
         if self.store:
@@ -262,24 +301,69 @@ class PlaybackDialog(wx.Dialog):
     def start(self, url):
         if not self.alive:
             return
-        try:
-            if isinstance(url, OfficialSource):
+        if not isinstance(url,OfficialSource):
+            self.report_error('Niepoprawne źródło materiału TVP.');return
+        handle=self.video.GetHandle()
+        started=time.monotonic()
+        def diagnostic(message):
+            try:
+                from logHandler import log
+                log.info('TV Player startup: '+message)
+            except ImportError:pass
+        diagnostic('background launch requested')
+        # Capture a Python stack if NVDA stops servicing its GUI during startup.
+        # Only filenames / source lines are recorded, never locals or account data.
+        last_pulse=[started]
+        def pulse():
+            if not self.alive or time.monotonic()-started>60:return
+            last_pulse[0]=time.monotonic()
+            wx.CallLater(250,pulse)
+        pulse()
+        def audit():
+            import sys,traceback
+            recorded=False
+            while self.alive and time.monotonic()-started<60:
+                time.sleep(.5)
+                stalled=time.monotonic()-last_pulse[0]
+                if stalled>2 and not recorded:
+                    frame=sys._current_frames().get(threading.main_thread().ident)
+                    stack=''.join(traceback.format_stack(frame)) if frame else 'stack unavailable'
+                    diagnostic(f'GUI pulse delayed {stalled:.3f} seconds\n'+stack)
+                    recorded=True
+                elif stalled<1:recorded=False
+        threading.Thread(target=audit,daemon=True).start()
+        pending=[];gate=threading.Lock();attached=[False]
+        def packet(event):
+            with gate:
+                if not attached[0]:pending.append(event);return
+            wx.CallAfter(self.handle_event,event)
+        def attach(player):
+            if not self.alive:player.close();return
+            self.player=player
+            diagnostic(f'player attached after {time.monotonic()-started:.3f} seconds')
+            with gate:
+                attached[0]=True;queued=list(pending);pending.clear()
+            for event in queued:self.handle_event(event)
+        def worker():
+            try:
                 from .webPlayer import WebPlayer
-                self.player = WebPlayer(self.video.GetHandle(), lambda event: wx.CallAfter(self.handle_event, event),
+                player = WebPlayer(handle, packet,
                                         url, start=self.resume_at, volume=self.settings["volume"],
                                         paused=bool(self.from_bookmark and self.settings["resumePaused"]),
-                                        quality=self.settings.get("quality", "auto"), direct=True)
-                return
-            raise CatalogError("Niepoprawne źródło materiału TVP.")
-        except Exception as error:
-            self.report_error(str(error))
+                                        quality=self.settings.get("quality", "auto"), direct=True,
+                                        **({"canal_start":self.live_start} if getattr(self,"live_start",None) is not None else {}))
+                diagnostic(f'process creation finished after {time.monotonic()-started:.3f} seconds')
+                wx.CallAfter(attach,player)
+            except Exception:
+                wx.CallAfter(self.report_error,'Nie udało się uruchomić odtwarzacza.')
+        threading.Thread(target=worker,daemon=True).start()
 
     def time_label(self):
-        if self.material.kind=="LIVE":return "Transmisja na żywo — przewijanie w dostępnym buforze"
+        if self.material.kind in ("LIVE","CANAL_LIVE","POLSAT_LIVE","PLAYERPL_LIVE"):return "Transmisja na żywo — przewijanie w dostępnym buforze"
         return f"Czas: {clock(self.position)} z {clock(self.duration)}"
 
     def position_text(self):
-        if self.material.kind=="LIVE":
+        if self.material.kind in ("LIVE","CANAL_LIVE","POLSAT_LIVE","PLAYERPL_LIVE"):
             return "Transmisja na żywo. Opóźnienie względem bieżącej transmisji: " + spoken_duration(max(0,self.duration-self.position))
         return spoken_time(self.position,self.duration)
 
@@ -345,8 +429,12 @@ class PlaybackDialog(wx.Dialog):
             return
         if name == "file-loaded":
             self.loaded = True
+            from .audioOutput import restore
+            restore(self)
+            if self.material.kind in ('CANAL','CANAL_LIVE','POLSAT','POLSAT_LIVE','PLAYERPL','PLAYERPL_LIVE'):
+                self.send('set_property','volume',self.settings['volume'])
             self.status.SetLabel("Odtwarzanie materiału.")
-            self.bookmark_button.Enable(self.material.kind != "LIVE")
+            self.bookmark_button.Enable(self.material.kind not in ("LIVE","CANAL","CANAL_LIVE","POLSAT","POLSAT_LIVE","PLAYERPL","PLAYERPL_LIVE"))
             ui.message("Rozpoczęto odtwarzanie.")
         elif name == "playback-restart" and self.announce_after_seek:
             self.announce_after_seek = False
@@ -367,7 +455,7 @@ class PlaybackDialog(wx.Dialog):
             elif prop == "duration":
                 self.duration = value or 0
             elif prop == "pause" and value is not None:
-                self.pause.SetLabel("&Wznów" if value else "&Pauza")
+                self.pause.SetLabel("Wznów" if value else "Pauza")
                 if self.paused_state is not None and self.paused_state != value and not self.finished:
                     ui.message("Pauza." if value else "Wznowiono odtwarzanie.")
                 self.paused_state = value
@@ -408,6 +496,7 @@ class PlaybackDialog(wx.Dialog):
             self.player.request_property("aid", 7404)
 
     def save_progress(self):
+        if self.material.kind in ("CANAL","CANAL_LIVE","POLSAT","POLSAT_LIVE","PLAYERPL","PLAYERPL_LIVE"):return
         if self.loaded and self.on_progress:
             try:
                 self.on_progress(self.material, self.position)
@@ -426,7 +515,7 @@ class PlaybackDialog(wx.Dialog):
 
     def on_close(self, event):
         self.hide_to_background()
-        ui.message("Odtwarzacz TVP Player działa w tle.")
+        ui.message("Odtwarzacz TV Player działa w tle.")
 
     def stop_playback(self, notify=True):
         if not self.alive:

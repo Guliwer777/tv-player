@@ -20,10 +20,11 @@ class Folder:
     resource: str
     description: str = ""
     url: str = ""
+    access_status: str = ""
 
     @property
     def label(self):
-        return self.title
+        return self.title + (" — " + self.access_status if self.access_status else "")
 
 
 def api(resource, **params):
@@ -52,6 +53,23 @@ def categories():
 
 
 def browse(folder, offset=0):
+    if folder.kind=='TVP_LIVE':
+        from .channelGroups import grouped
+        rows=[];page=0
+        while True:
+            payload=api('products/lives',firstResult=page,maxResults=50);rows.extend(parse_items(payload))
+            if page+50>=payload.get('meta',{}).get('totalCount',0):break
+            page+=50
+        return grouped(rows,'TVP_LIVE',folder.resource.split(':',1)[1] if ':' in folder.resource else None,prefix='products/lives')
+    if folder.kind=='PLAYERPL':
+        from .playerpl import browse as browse_playerpl
+        return browse_playerpl(folder,offset)
+    if folder.kind=='POLSAT':
+        from .polsat import browse as browse_polsat
+        return browse_polsat(folder,offset)
+    if folder.kind=='CANAL':
+        from .canal import browse as browse_canal
+        return browse_canal(folder)
     if folder.kind=='SPORT':
         from .sport import browse as browse_sport
         return browse_sport(folder)
@@ -137,11 +155,16 @@ class Material:
     url: str
     kind: str
     payable: bool
+    start: float = 0
+    end: float = 0
+    playback_mode: str = ""
+    provider_id: str = ""
+    access_status: str = ""
 
     @property
     def label(self):
         kind = "serial lub program" if self.kind == "SERIAL" else "materiał wideo"
-        return f"{self.title} — {kind}" + ("; płatny" if self.payable else "")
+        return f"{self.title} — {kind}" + ("; płatny" if self.payable else "") + (" — " + self.access_status if self.access_status else "")
 
 
 def plain_text(value):
@@ -159,6 +182,9 @@ def description_from(payload):
     return ''
 
 def material_description(material):
+    if material.kind.startswith('PLAYERPL'):return material.description
+    if material.kind.startswith('POLSAT'):return material.description
+    if material.kind in ("CANAL","CANAL_LIVE"):return material.description
     if urlsplit(material.url).hostname=='sport.tvp.pl':return material.description
     resource='products/lives' if material.kind=='LIVE' else 'products/vods'
     payload=api(f'{resource}/{material.id}')

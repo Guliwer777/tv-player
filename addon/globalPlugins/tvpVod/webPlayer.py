@@ -11,7 +11,7 @@ from .catalog import CatalogError
 
 
 class WebPlayer:
-    def __init__(self, hwnd, on_event, source, *, start=0, volume=70, paused=False, quality="auto", direct=False):
+    def __init__(self, hwnd, on_event, source, *, start=0, volume=70, paused=False, quality="auto", direct=False, canal_start=None, canal_probe=False):
         executable=Path(__file__).parent/'bin/tvpWebPlayer.exe'
         if not executable.is_file():
             raise CatalogError('Brak pomocniczego odtwarzacza. Zainstaluj pełny pakiet dodatku.')
@@ -20,22 +20,55 @@ class WebPlayer:
         self.commands=queue.Queue()
         self.request_ids=set()
         self.lock=threading.Lock()
+        from .canal import official_url as canal_url
+        canal=canal_url(source.url)
+        from .polsat import official_url as polsat_url
+        polsat=polsat_url(source.url)
+        from .playerpl import official_url as playerpl_url
+        playerpl=playerpl_url(source.url)
         env=dict(os.environ)
         try:
             import globalVars
             profile=Path(globalVars.appArgs.configPath)/'tvpVod-webview'
         except (ImportError,AttributeError):
             profile=Path(os.environ['LOCALAPPDATA'])/'tvpVod-webview'
+        account_root=profile.parent
+        if canal:profile=profile.parent/'tvpPlayer-canal-webview'
+        if polsat:profile=profile.parent/'tvpPlayer-polsat-webview'
+        if playerpl:
+            from .playerpl_api import current_record,PlayerError
+            from .playerpl_account import AccountError
+            try:record=current_record()
+            except (PlayerError,AccountError) as exc:raise CatalogError(str(exc)) from None
+            import hashlib
+            scope=hashlib.sha256((record['uid']+'|'+(record.get('profile') or {}).get('id','')).encode()).hexdigest()[:24] if record else 'anonymous'
+            profile=account_root/'tvpPlayer-player-webview'/scope
         profile.mkdir(parents=True,exist_ok=True)
         env['WEBVIEW2_USER_DATA_FOLDER']=str(profile)
-        env['TVPVOD_ACCOUNT_FILE']=str(profile.parent/'tvpVod-account.dat')
+        if playerpl:
+            for key in ('TVPVOD_ACCOUNT_FILE','CANAL_ACCOUNT_FILE','POLSAT_ACCOUNT_FILE'):env.pop(key,None)
+            env['PLAYERPL_ACCOUNT_FILE']=str(account_root/'tvpPlayer-player-account.dat')
+        elif polsat:
+            env.pop('TVPVOD_ACCOUNT_FILE',None);env.pop('CANAL_ACCOUNT_FILE',None)
+            env['POLSAT_ACCOUNT_FILE']=str(profile.parent/'tvpPlayer-polsat-account.dat')
+        elif not canal:env['TVPVOD_ACCOUNT_FILE']=str(profile.parent/'tvpVod-account.dat')
+        else:
+            env.pop('TVPVOD_ACCOUNT_FILE',None)
+            env['CANAL_ACCOUNT_FILE']=str(profile.parent/'tvpPlayer-canal-account.dat')
         args=[str(executable),'--parent',str(hwnd or 0),'--url',source.url,
               '--video-type',source.video_type,
               '--start',str(float(start)),'--volume',str(int(volume)),'--quality',str(quality)]
         if paused:
             args.append('--paused')
-        if direct:
-            args.append('--direct')
+        if playerpl:
+            args.append('--playerpl')
+        elif polsat:
+            args.append('--polsat')
+        elif canal:
+            args.append('--canal')
+            if canal_probe:args.append('--canal-probe')
+            if canal_start is not None:args.extend(['--canal-start',str(float(canal_start))])
+        elif direct:args.append('--direct')
         self.process=subprocess.Popen(args,stdin=subprocess.PIPE,stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,creationflags=subprocess.CREATE_NO_WINDOW,
             close_fds=True,env=env)
@@ -72,7 +105,7 @@ class WebPlayer:
             pass
         finally:
             if not self.closed.is_set() and not failure_reported:
-                self.on_event({'event':'player-error','message':'Odtwarzacz TVP Player został zamknięty. Otwórz materiał ponownie.'})
+                self.on_event({'event':'player-error','message':'Odtwarzacz TV Player został zamknięty. Otwórz materiał ponownie.'})
             self.close()
             self.process.stdout.close()
 
@@ -88,6 +121,8 @@ class WebPlayer:
             value=packet.get('data')
             return packet.get('error')!='success' or (isinstance(value,(int,float)) and math.isfinite(value) and value>=0)
         event=packet.get('event')
+        if event=='replay-probe':
+            return type(packet.get('target')) in (int,float) and math.isfinite(packet['target']) and packet['target']>0 and type(packet.get('available')) is bool
         if event=='addon-command':
             from .commands import ACTIONS
             return packet.get('action') in set(ACTIONS.values()) | {'catalog-home','catalog-back','focus-controls'}
@@ -116,7 +151,8 @@ class WebPlayer:
             if not self.closed.is_set():
                 self.on_event({'event':'player-error','message':'Utracono sterowanie odtwarzaczem TVP.'})
         finally:
-            self.process.stdin.close()
+            try:self.process.stdin.close()
+            except (OSError,ValueError):pass
 
     def close(self):
         with self.lock:

@@ -12,7 +12,7 @@
     if(key==='f6') action='focus-controls';
     else if(!event.altKey && event.ctrlKey) {
       if(event.shiftKey) action={arrowup:'volume-up',arrowdown:'volume-down'}[key];
-      else action={' ':'pause',t:'time',z:'bookmark',arrowleft:'back',arrowright:'forward',
+      else action={' ':'pause',p:'focus-player',t:'time',z:'bookmark',arrowleft:'back',arrowright:'forward',
         arrowup:'step-up',arrowdown:'step-down','1':'audio-1','2':'audio-2','3':'audio-3'}[key];
     } else if(!event.altKey && !event.shiftKey) {
       if(event.target?.closest('.ui-player-gui-slider--video')) {

@@ -6,6 +6,7 @@ from pathlib import Path
 import uuid
 
 from .catalog import Folder, Material
+from .programmeFormat import ORDERS,DEFAULT as PROGRAMME_ORDER,REPLAY_SIGNALS
 
 SEEK_STEPS = (5, 10, 15, 30, 60)
 QUALITY_CHOICES = (
@@ -14,7 +15,7 @@ QUALITY_CHOICES = (
     ("3000000", "Wyższa — około 3 Mb/s"), ("max", "Najwyższa dostępna"))
 COMMAND_FEEDBACK_CHOICES = (("speech", "Komunikaty głosowe"), ("sound", "Dźwięki"), ("none", "Brak powiadomień"))
 COMMAND_TIMEOUT_CHOICES = tuple((value, f"{value} s bezczynności") for value in (1,2,3,5,10,15,30,60)) + ((0, "Bez limitu czasu — do Escape"), (-1, "Jedno polecenie — wyłącz po wykonaniu skrótu"))
-DEFAULTS = {"afterEnd": "stop", "seekStep": 10, "volume": 70, "resumePaused": False, "quality": "auto", "commandFeedback": "speech", "commandTimeout": 5}
+DEFAULTS = {"replaySignal":"sound","programmeOrder":PROGRAMME_ORDER,"afterEnd": "stop", "seekStep": 10, "volume": 70, "resumePaused": False, "quality": "auto", "commandFeedback": "speech", "commandTimeout": 5, "loginBrowser":"edge", "audioOutput":"", "audioOutputName":"Domyślne urządzenie systemowe"}
 
 
 @dataclass(frozen=True)
@@ -32,7 +33,9 @@ class BookmarkEntry:
 
 
 def encode(item):
-    return {"type": type(item).__name__, "data": asdict(item)} if item is not None else None
+    if item is None:return None
+    data=asdict(item);data.pop("access_status",None)
+    return {"type":type(item).__name__,"data":data}
 
 
 def decode(item):
@@ -58,6 +61,7 @@ class Store:
         self.settings = dict(DEFAULTS)
         self.bookmarks = []
         self.favorites = []
+        self.favorite_folders = []
         self.watched = set()
         self.last_session = None
         if self.path.exists():
@@ -68,12 +72,24 @@ class Store:
             self.bookmarks = document["bookmarks"]
             favorites = document.get("favorites", [])
             if not isinstance(favorites,list):raise ValueError("Niepoprawna lista ulubionych.")
-            self.favorites = [encode(item) for item in (decode(entry) for entry in favorites) if isinstance(item,(Material,Folder))]
+            folders=document.get('favoriteFolders',[])
+            if not isinstance(folders,list) or any(not isinstance(row,dict) or not isinstance(row.get('id'),str) or not isinstance(row.get('name'),str) or not row['id'] or not row['name'].strip() for row in folders):raise ValueError('Niepoprawna lista folderów ulubionych.')
+            if len({row['id'] for row in folders})!=len(folders):raise ValueError('Powtórzony identyfikator folderu ulubionych.')
+            self.favorite_folders=[dict(id=row['id'],name=row['name']) for row in folders]
+            known={row['id'] for row in folders}
+            for entry in favorites:
+                item=decode(entry)
+                if isinstance(item,(Material,Folder)):
+                    saved=encode(item)
+                    if entry.get('folder') in known:saved['folder']=entry['folder']
+                    self.favorites.append(saved)
             self.last_session = document.get("lastSession")
             watched=document.get('watched',[])
             if not isinstance(watched,list) or any(type(value) is not int for value in watched):
                 raise ValueError("Niepoprawna lista obejrzanych materiałów.")
             self.watched=set(watched)
+            if self.settings["programmeOrder"] not in dict(ORDERS):self.settings["programmeOrder"]=PROGRAMME_ORDER
+            if self.settings['replaySignal'] not in dict(REPLAY_SIGNALS):self.settings['replaySignal']='sound'
             if self.settings["seekStep"] not in SEEK_STEPS:
                 self.settings["seekStep"] = 10
             if self.settings["afterEnd"] not in ("stop", "next"):
@@ -83,24 +99,30 @@ class Store:
             self.settings["resumePaused"] = self.settings["resumePaused"] is True
             if self.settings["quality"] not in dict(QUALITY_CHOICES):
                 self.settings["quality"] = "auto"
+            if self.settings['loginBrowser'] not in ('default','edge','chrome','firefox'):
+                self.settings['loginBrowser']='edge'
+            if not isinstance(self.settings['audioOutput'],str):self.settings['audioOutput']=''
+            if not isinstance(self.settings['audioOutputName'],str):self.settings['audioOutputName']='Domyślne urządzenie systemowe'
             if self.settings["commandFeedback"] not in dict(COMMAND_FEEDBACK_CHOICES):
                 self.settings["commandFeedback"] = "speech"
             if type(self.settings["commandTimeout"]) is not int or self.settings["commandTimeout"] not in dict(COMMAND_TIMEOUT_CHOICES):
                 self.settings["commandTimeout"] = 5
 
-    def write(self, settings, bookmarks, *, session=None, replace_session=False, favorites=None, watched=None):
+    def write(self, settings, bookmarks, *, session=None, replace_session=False, favorites=None, watched=None, favorite_folders=None):
         self.path.parent.mkdir(parents=True, exist_ok=True)
         temporary = self.path.with_suffix(".tmp")
         last_session = session if replace_session else self.last_session
         favorites = self.favorites if favorites is None else favorites
         watched = self.watched if watched is None else watched
+        favorite_folders=self.favorite_folders if favorite_folders is None else favorite_folders
         temporary.write_text(json.dumps({"version": 1, "settings": settings, "bookmarks": bookmarks,
-                                        "lastSession": last_session, "favorites": favorites, "watched": sorted(watched)},
+                                        "lastSession": last_session, "favorites": favorites, "favoriteFolders":favorite_folders, "watched": sorted(watched)},
                                         ensure_ascii=False, indent=2), encoding="utf-8")
         temporary.replace(self.path)
         self.settings, self.bookmarks = dict(settings), list(bookmarks)
         self.last_session = last_session
         self.favorites = list(favorites)
+        self.favorite_folders=list(favorite_folders)
         self.watched = set(watched)
 
     def mark_watched(self, material):
@@ -112,10 +134,12 @@ class Store:
     def is_watched(self, item):
         return isinstance(item,Material) and item.kind not in ('LIVE','SERIAL') and item.id in self.watched
 
-    def add_favorite(self, item):
+    def add_favorite(self, item, folder=None):
         if not isinstance(item,(Material,Folder)):raise ValueError("Wybierz materiał lub kategorię.")
+        self.check_favorite_folder(folder)
         entry=encode(item)
-        if any(self.favorite_key(saved)==self.favorite_key(entry) for saved in self.favorites):return False
+        if folder:entry['folder']=folder
+        if any(self.favorite_key(saved)==self.favorite_key(entry) and saved.get('folder')==folder for saved in self.favorites):return False
         self.write(self.settings,self.bookmarks,favorites=[*self.favorites,entry])
         return True
 
@@ -124,9 +148,40 @@ class Store:
         data=entry['data']
         return entry['type'],data['id'],data['kind'],data.get('resource','')
 
-    def remove_favorite(self,item):
+    def remove_favorite(self,item,folder=None):
         key=self.favorite_key(encode(item))
-        self.write(self.settings,self.bookmarks,favorites=[entry for entry in self.favorites if self.favorite_key(entry)!=key])
+        self.write(self.settings,self.bookmarks,favorites=[entry for entry in self.favorites if self.favorite_key(entry)!=key or entry.get('folder')!=folder])
+
+    def check_favorite_folder(self,folder):
+        if folder is not None and not any(row['id']==folder for row in self.favorite_folders):raise ValueError('Folder ulubionych nie istnieje.')
+
+    def create_favorite_folder(self,name):
+        name=name.strip()
+        if not name or len(name)>120:raise ValueError('Nazwa folderu musi mieć od 1 do 120 znaków.')
+        if any(row['name'].casefold()==name.casefold() for row in self.favorite_folders):raise ValueError('Folder o tej nazwie już istnieje.')
+        row={'id':uuid.uuid4().hex,'name':name}
+        self.write(self.settings,self.bookmarks,favorite_folders=[*self.favorite_folders,row])
+        return row
+
+    def remove_favorite_folder(self,folder):
+        self.check_favorite_folder(folder)
+        entries=[];seen=set()
+        for saved in self.favorites:
+            entry=dict(saved)
+            if entry.get('folder')==folder:entry.pop('folder')
+            key=(entry.get('folder'),self.favorite_key(entry))
+            if key not in seen:entries.append(entry);seen.add(key)
+        self.write(self.settings,self.bookmarks,favorites=entries,favorite_folders=[row for row in self.favorite_folders if row['id']!=folder])
+
+    def move_favorite(self,item,source,target):
+        self.check_favorite_folder(target)
+        key=self.favorite_key(encode(item));entries=[]
+        for saved in self.favorites:
+            if self.favorite_key(saved)==key and saved.get('folder') in (source,target):continue
+            entries.append(saved)
+        entry=encode(item)
+        if target:entry['folder']=target
+        self.write(self.settings,self.bookmarks,favorites=[*entries,entry])
 
     def save_session(self, material, position, context):
         if material.kind == "LIVE" or not math.isfinite(position) or position < 0:

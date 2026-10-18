@@ -9,7 +9,7 @@
     status.textContent='Błąd odtwarzacza: '+code;
     const detail=String(error?.message||'').replace(/https?:\/\/\S+/g,'[adres]').slice(0,250);
     const type=code===1003?error?.data?.[1]:error?.data?.[2];
-    send({event:error?.severity===1?'player-notice':'player-error',message:'Odtwarzacz TVP Player: '+code+(Number.isInteger(type)?' (żądanie '+type+')':'')+(detail?' — '+detail:'')});
+    send({event:error?.severity===1?'player-notice':'player-error',message:'Odtwarzacz TV Player: '+code+(Number.isInteger(type)?' (żądanie '+type+')':'')+(detail?' — '+detail:'')});
   }
   function audioList() {
     const raw=typeof player.getAudioTracks==='function'?player.getAudioTracks():[];
@@ -73,7 +73,7 @@
   window.addEventListener('keydown',event=>{
     const key=event.key.toLowerCase();let action;
     if(event.ctrlKey && !event.altKey)action=event.shiftKey?{arrowup:'volume-up',arrowdown:'volume-down'}[key]:
-      {' ':'pause',t:'time',z:'bookmark',u:'favorite',arrowleft:'back',arrowright:'forward',arrowup:'step-up',arrowdown:'step-down','1':'audio-1','2':'audio-2','3':'audio-3'}[key];
+      {' ':'pause',p:'focus-player',t:'time',z:'bookmark',u:'favorite',arrowleft:'back',arrowright:'forward',arrowup:'step-up',arrowdown:'step-down','1':'audio-1','2':'audio-2','3':'audio-3'}[key];
     else if(!event.altKey && !event.shiftKey)action={f6:'focus-controls',f1:'help',escape:'catalog-home',backspace:'catalog-back'}[key];
     if(action){event.preventDefault();event.stopImmediatePropagation();send({event:'addon-command',action});}
   },true);

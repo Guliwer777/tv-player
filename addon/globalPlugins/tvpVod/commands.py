@@ -22,6 +22,8 @@ def action_from_event(event, wx):
 
 ACTIVATION = frozenset(("nvda", "shift", "v"))
 ACTIONS = {
+    frozenset(("control", "p")): "focus-player",
+    frozenset(("control", "d")): "output",
     frozenset(("control", "u")): "favorite",
     frozenset(("control", "space")): "pause",
     frozenset(("control", "t")): "time",

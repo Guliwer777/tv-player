@@ -10,7 +10,7 @@ import os
 from pathlib import Path
 import sys
 import threading
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit,parse_qs
 
 import wx
 import wx.html2 as html2
@@ -21,18 +21,34 @@ def official_url(url, allow_sport=False):
     return parts.scheme == 'https' and (parts.hostname == 'vod.tvp.pl' or allow_sport and parts.hostname=='sport.tvp.pl') and not parts.username and parts.port in (None,443)
 
 
+def canal_navigation_url(url):
+    try:
+        p=urlsplit(url)
+        if url=='about:blank':return True
+        hosts=('www.canalplus.com','logowanie.pl.canalplus.com','pass.canal-plus.com','account.canalplus.com','account.int.canalplus.com','login.canalplus.com','secure-player.canal-plus.com')
+        captcha=p.hostname in ('www.google.com','www.recaptcha.net') and p.path.startswith('/recaptcha/')
+        return p.scheme=='https' and not p.username and p.port in (None,443) and (p.hostname in hosts or captcha)
+    except ValueError:return False
+
+
 def emit(value):
     print(json.dumps(value, ensure_ascii=True), flush=True)
 
 
 class Host(wx.Frame):
     def __init__(self, options):
-        super().__init__(None, title='TVP Player — odtwarzacz',
+        self.playerpl=getattr(options,'playerpl',False)
+        if options.canal or options.polsat or self.playerpl:options.parent=0  # Provider browsers stay separate from NVDA's UI thread.
+        super().__init__(None, title='TV Player — Polsat Box Go' if options.polsat else 'TV Player — CANAL+' if options.canal else 'TV Player — odtwarzacz',
                          style=wx.NO_BORDER if options.parent else wx.DEFAULT_FRAME_STYLE,
                          size=(900,650))
+        self.canal=options.canal
+        self.polsat=options.polsat
         self.closed = False
         self.embedded = False
         self.direct = None
+        if options.polsat or self.playerpl:
+            os.environ['WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS']=(os.environ.get('WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS','')+' --autoplay-policy=no-user-gesture-required --disable-background-timer-throttling --disable-renderer-backgrounding').strip()
         if options.direct:
             os.environ['WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS']=(os.environ.get('WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS','')+' --autoplay-policy=no-user-gesture-required').strip()
             from direct_server import DirectServer
@@ -46,15 +62,46 @@ class Host(wx.Frame):
         if not self.view:
             raise RuntimeError('Nie udało się utworzyć okna WebView2.')
         self.view.AddScriptMessageHandler('tvp_bridge')
+        if self.playerpl or self.polsat:
+            self.view.AddUserScript((Path(__file__).parent/'audio_hooks.js').read_text(encoding='utf-8'))
+        if self.canal and options.canal_probe:
+            self.view.AddUserScript("if(location.origin==='https://www.canalplus.com'){const d=Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype,'volume');Object.defineProperty(HTMLMediaElement.prototype,'volume',{configurable:true,get:d.get,set:function(){d.set.call(this,0)}});const play=HTMLMediaElement.prototype.play;HTMLMediaElement.prototype.play=function(){d.set.call(this,0);return play.apply(this,arguments)};}")
+        if self.canal and os.environ.get('CANAL_QA_SILENT')=='1':
+            self.view.AddUserScript("if(location.origin==='https://www.canalplus.com'){const play=HTMLMediaElement.prototype.play;HTMLMediaElement.prototype.play=function(){this.volume=0;return play.apply(this,arguments)}}")
+        if self.playerpl:
+            from playerpl_account import load,bootstrap,AccountError
+            record=load()
+            if record:self.view.AddUserScript(bootstrap(record))
+            self.SetTitle('TV Player — Player')
+        if self.polsat:
+            from polsat_account import load,bootstrap,AccountError
+            record=load()
+            if not record:raise RuntimeError('Najpierw połącz konto Polsat Box Go.')
+            self.view.AddUserScript(bootstrap(record))
+        if self.canal:
+            from canal_account import load, bootstrap, channel_script, AccountError
+            try:
+                account = load()
+                if account:
+                    self.view.AddUserScript(bootstrap(account))
+                    fragment=urlsplit(options.url).fragment
+                    if fragment.startswith('tvp-player-channel='):
+                        self.view.AddUserScript(channel_script(account,fragment.split('=',1)[1],debug=os.environ.get('CANAL_QA')=='1',start_at=options.canal_start))
+            except AccountError:
+                emit({'event':'player-notice','message':'Nie można odczytać konta CANAL+. Połącz konto ponownie.'})
         if self.direct:
             self.view.AddUserScript((Path(__file__).parent/'vendor/shaka-player.compiled.js').read_text(encoding='utf-8'))
         else:
-            source = (Path(__file__).parent / 'bridge.js').read_text(encoding='utf-8')
-            source = source.replace('__SETTINGS__', json.dumps({'start':options.start,'volume':options.volume,'pause':options.paused,'quality':options.quality,'path':urlsplit(options.url).path}))
+            source = (Path(__file__).parent / ('playerpl_bridge.js' if self.playerpl else 'polsat_bridge.js' if self.polsat else 'canal_bridge.js' if self.canal else 'bridge.js')).read_text(encoding='utf-8')
+            source = source.replace('__SETTINGS__', json.dumps({'start':options.start,'volume':options.volume,'pause':options.paused,'quality':options.quality,'path':urlsplit(options.url).path,'polsatOrigin':float(parse_qs(urlsplit(options.url).query).get('tvpTimelineOrigin',['0'])[0]) if self.polsat else 0,'polsatStart':float(parse_qs(urlsplit(options.url).query).get('tvpStartOver',['0'])[0]) if self.polsat else 0}))
+            if self.playerpl:
+                # The bridge needs an explicit live flag; numeric duration isn't a reliable live detector.
+                source=source.replace('"path":', '"playerplLive":'+('true' if options.video_type=='LIVE' else 'false')+',"path":',1)
             self.view.AddUserScript(source)
         self.view.Bind(html2.EVT_WEBVIEW_SCRIPT_MESSAGE_RECEIVED, self.message)
         self.view.Bind(html2.EVT_WEBVIEW_NAVIGATING, self.navigate)
         self.view.Bind(html2.EVT_WEBVIEW_ERROR, self.error)
+        if self.canal or self.polsat or self.playerpl:self.view.Bind(html2.EVT_WEBVIEW_NEWWINDOW,self.canal_new_window)
         self.Bind(wx.EVT_CLOSE, self.close)
         layout=wx.BoxSizer(wx.VERTICAL)
         layout.Add(self.view,1,wx.EXPAND)
@@ -74,7 +121,8 @@ class Host(wx.Frame):
         self.Bind(wx.EVT_TIMER, self.resize, self.timer)
         self.timer.Start(200)
         if options.parent:self.ShowWithoutActivating()
-        else:self.Show()
+        elif not (self.canal or self.polsat or self.playerpl):self.Show()
+        self.Layout()
         self.view.LoadURL(self.direct.url if self.direct else options.url)
         threading.Thread(target=self.read,daemon=True).start()
 
@@ -132,7 +180,22 @@ class Host(wx.Frame):
                             self.SetSize(point.x,point.y,*wanted)
                     if not self.IsShown():self.ShowWithoutActivating()
 
+    def canal_new_window(self,event):
+        event.Veto()
+        if self.trusted_page(event.GetURL()):self.view.LoadURL(event.GetURL())
+
     def navigate(self,event):
+        if self.playerpl:
+            from playerpl import official_url as playerpl_url
+            if not playerpl_url(event.GetURL()):event.Veto()
+            return
+        if self.polsat:
+            from polsat import official_url as polsat_url
+            if not polsat_url(event.GetURL()):event.Veto()
+            return
+        if self.canal:
+            if not canal_navigation_url(event.GetURL()):event.Veto()
+            return
         if self.direct:
             if not self.direct.accepts(event.GetURL()):event.Veto()
             return
@@ -144,7 +207,7 @@ class Host(wx.Frame):
 
     def error(self,event):
         if 'CONNECTION_ABORTED' not in event.GetString():
-            emit({'event':'player-error','message':'Nie udało się załadować oficjalnego odtwarzacza TVP. Sprawdź połączenie z internetem.'})
+            emit({'event':'player-error','message':'Nie udało się załadować oficjalnego odtwarzacza dostawcy. Sprawdź połączenie z internetem.'})
 
     def message(self,event):
         if not self.trusted_page():
@@ -174,6 +237,13 @@ class Host(wx.Frame):
             return
         if packet.get('command')==['quit']:
             self.Close()
+        elif (self.canal or self.polsat or self.playerpl) and packet.get('command')==['window-hide']:
+            self.Hide()
+        elif (self.canal or self.polsat or self.playerpl) and packet.get('command')==['window-show']:
+            self.Iconize(False);self.Show();self.Raise();self.view.SetFocus()
+            try:
+                ctypes.windll.user32.SetForegroundWindow(self.GetHandle())
+            except (OSError,AttributeError):pass
         elif packet.get('command')==['focus']:
             self.view.SetFocus()
         elif self.trusted_page():
@@ -185,8 +255,17 @@ class Host(wx.Frame):
         if self.direct:self.direct.close()
         self.Destroy()
 
-    def trusted_page(self):
-        url=self.view.GetCurrentURL()
+    def trusted_page(self,url=None):
+        url=url or self.view.GetCurrentURL()
+        if self.playerpl:
+            from playerpl import official_url as playerpl_url
+            return playerpl_url(url)
+        if self.polsat:
+            from polsat import official_url as polsat_url
+            return polsat_url(url)
+        if self.canal:
+            from canal import official_url as canal_url
+            return canal_url(url)
         return self.direct.accepts(url) if self.direct else official_url(url)
 
 
@@ -200,11 +279,22 @@ def main():
     parser.add_argument('--quality',choices=['auto','min','800000','1500000','3000000','max'],default='auto')
     parser.add_argument('--direct',action='store_true')
     parser.add_argument('--account',action='store_true')
+    parser.add_argument('--canal',action='store_true')
+    parser.add_argument('--polsat',action='store_true')
+    parser.add_argument('--playerpl',action='store_true')
+    parser.add_argument('--canal-probe',action='store_true')
+    parser.add_argument('--canal-start',type=float,default=None)
+    parser.add_argument('--canal-login',action='store_true')
     parser.add_argument('--pair-code',action='store_true')
     parser.add_argument('--video-type',choices=['MOVIE','LIVE'],default='MOVIE')
     parser.add_argument('--protocol',choices=['AUTO','DASH','HLS'],default='AUTO')
     options=parser.parse_args()
-    if not official_url(options.url,allow_sport=options.direct):
+    if sum(bool(x) for x in (options.playerpl,options.polsat,options.canal or options.canal_login,options.direct,options.account,options.pair_code))>1:
+        raise ValueError('Wybierz jeden tryb dostawcy odtwarzacza.')
+    from canal import official_url as canal_url
+    from polsat import official_url as polsat_url
+    from playerpl import official_url as playerpl_url
+    if not (playerpl_url(options.url) if options.playerpl else polsat_url(options.url) if options.polsat else canal_url(options.url) if (options.canal or options.canal_login) else official_url(options.url,allow_sport=options.direct)):
         raise ValueError('Oczekiwano adresu materiału TVP VOD lub TVP Sport.')
     options.volume=max(0,min(100,options.volume))
     options.start=max(0,options.start)
@@ -214,7 +304,10 @@ def main():
         dialog=PairDialog();dialog.ShowModal();dialog.Destroy();return
     if not html2.WebView.IsBackendAvailable(html2.WebViewBackendEdge):
         raise RuntimeError('Brak Microsoft Edge WebView2 Runtime. Zainstaluj Evergreen Runtime ze strony https://developer.microsoft.com/microsoft-edge/webview2/ . Sama przeglądarka Edge nie zastępuje tego składnika.')
-    if options.account:
+    if options.canal_login:
+        from canal_login import CanalLoginHost
+        CanalLoginHost()
+    elif options.account:
         from account_host import AccountHost
         AccountHost()
     else:Host(options)

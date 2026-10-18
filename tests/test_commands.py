@@ -21,6 +21,12 @@ def method(filename, clsname, name, namespace):
 
 
 class CommandTests(unittest.TestCase):
+    def test_control_p_focuses_existing_player_without_playback_command(self):
+        self.assertEqual(commands.ACTIONS[frozenset(('control','p'))],'focus-player')
+        calls=[]
+        execute=method('playbackDialog.py','PlaybackDialog','execute_command',{})
+        dialog=SimpleNamespace(alive=True,Show=lambda:calls.append('show'),Raise=lambda:calls.append('raise'),pause=SimpleNamespace(SetFocus=lambda:calls.append('focus')))
+        execute(dialog,'focus-player');self.assertEqual(calls,['show','raise','focus'])
     def test_completion_marks_once_and_preserves_autoplay(self):
         for after in ('stop','next'):
             marked=[];spoken=[];stopped=[];refreshed=[]
@@ -92,7 +98,7 @@ class CommandTests(unittest.TestCase):
         for choice in ('speech','sound','none'):
             plugin.dialog.store.settings['commandFeedback']=choice
             notify(plugin,True);notify(plugin,False)
-        self.assertEqual(spoken,['Tryb poleceń TVP Player aktywny','Anulowano tryb poleceń TVP Player'])
+        self.assertEqual(spoken,['Tryb poleceń TV Player aktywny','Anulowano tryb poleceń TV Player'])
         self.assertEqual(sounds,[(880,80),(440,80)])
 
     def test_multiple_commands_remain_consumed_until_cancelled(self):
@@ -216,9 +222,9 @@ class BackgroundTests(unittest.TestCase):
         self.assertEqual(calls, ["forward", "native"])
 
     def test_catalog_routes_playback_shortcuts_without_opening_player(self):
-        wx = SimpleNamespace(WXK_SPACE=32, WXK_F1=340, WXK_LEFT=314, WXK_RIGHT=316,
+        wx = SimpleNamespace(WXK_SPACE=32, WXK_F1=340, WXK_F10=349, WXK_LEFT=314, WXK_RIGHT=316,
                              WXK_UP=315, WXK_DOWN=317)
-        namespace = {"wx": wx, "action_from_event": commands.action_from_event}
+        namespace = {"wx": wx, "action_from_event": commands.action_from_event, "planning_mode": lambda event: None}
         handler = method("__init__.py", "CatalogDialog", "on_key", namespace)
         calls = []
         dialog = SimpleNamespace(playback=SimpleNamespace(alive=True, execute_command=calls.append))
@@ -230,7 +236,7 @@ class BackgroundTests(unittest.TestCase):
     def test_back_and_escape_preserve_playback(self):
         calls = []
         parent = SimpleNamespace(Show=lambda: calls.append("show"), Raise=lambda: None,
-            go_home=lambda: calls.append("home"), list=SimpleNamespace(SetFocus=lambda: calls.append("list")))
+            go_home=lambda: calls.append("home"), restore_playback_context=lambda player:calls.append("list"), list=SimpleNamespace(SetFocus=lambda: calls.append("list")))
         dialog = SimpleNamespace(save_progress=lambda: calls.append("save"), Hide=lambda: calls.append("hide"),
                                  GetParent=lambda: parent)
         navigate = method("playbackDialog.py", "PlaybackDialog", "return_to_catalog", {})
@@ -273,3 +279,15 @@ class BackgroundTests(unittest.TestCase):
         dialog = SimpleNamespace(alive=True, playback=None, resume_last=lambda **kw: calls.append(kw))
         execute(SimpleNamespace(dialog=dialog), "pause")
         self.assertEqual(calls, [{"background": True}])
+
+
+class VolumeDirectionTests(unittest.TestCase):
+ def test_plain_up_increases_and_down_decreases_only_on_volume(self):
+  wx=SimpleNamespace(WXK_SPACE=32,WXK_F1=340,WXK_LEFT=314,WXK_RIGHT=316,WXK_UP=315,WXK_DOWN=317,WXK_ESCAPE=27,WXK_BACK=8)
+  handler=method('playbackDialog.py','PlaybackDialog','on_key',{'wx':wx,'ACTIONS':commands.ACTIONS})
+  volume=object();calls=[]
+  dialog=SimpleNamespace(volume=volume,timeline=object(),FindFocus=lambda:volume,execute_command=calls.append)
+  for code in (wx.WXK_UP,wx.WXK_DOWN):
+   event=SimpleNamespace(GetKeyCode=lambda code=code:code,ControlDown=lambda:False,ShiftDown=lambda:False,AltDown=lambda:False,Skip=lambda:calls.append('native'))
+   handler(dialog,event)
+  self.assertEqual(calls,['volume-up','volume-down'])
