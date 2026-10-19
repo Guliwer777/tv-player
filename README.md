@@ -8,7 +8,7 @@ ani produktem tych dostawców.
 
 ## Pobieranie i instalacja
 
-Pobierz plik `.nvda-addon` z [wydań GitHub](https://github.com/Guliwer777/tvp-player/releases).
+Pobierz plik `.nvda-addon` z [wydań GitHub](https://github.com/Guliwer777/tv-player/releases).
 Otwórz paczkę, zatwierdź instalację w NVDA i uruchom NVDA ponownie.
 Wewnętrzny identyfikator dodatku pozostaje `tvpVod`, aby zachować aktualizacje i dane.
 
