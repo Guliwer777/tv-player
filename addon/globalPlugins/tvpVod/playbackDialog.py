@@ -9,6 +9,7 @@ from .player import OfficialSource, resolve
 from .state import DEFAULTS, SEEK_STEPS
 from .accessibility import spoken_time, spoken_duration, show_help, route_player_shortcut
 from .commands import ACTIONS
+from .episodeOrder import episode_number, title_number
 
 
 def clock(seconds):
@@ -58,7 +59,7 @@ class NamedSlider(wx.Slider):
 
 class PlaybackDialog(wx.Dialog):
     def __init__(self, parent, material, *, store=None, on_bookmark=None, resume_at=None,
-                 on_progress=None, on_stopped=None, live_start=None, display_title=None):
+                 on_progress=None, on_stopped=None, on_next=None, live_start=None, display_title=None):
         super().__init__(parent, title="TV Player — " + (display_title or material.title), size=(800, 600))
         self.display_title=display_title or material.title
         self.alive = True
@@ -70,6 +71,10 @@ class PlaybackDialog(wx.Dialog):
         self.on_bookmark = on_bookmark
         self.on_progress = on_progress
         self.on_stopped = on_stopped
+        self.on_next = on_next
+        self.playback_generation = 0
+        self.automatic_transition = False
+        self.purchase_pending = False
         self.last_save = 0
         self.save_error_reported = False
         self.settings = dict(store.settings if store else DEFAULTS)
@@ -78,6 +83,7 @@ class PlaybackDialog(wx.Dialog):
         self.next_requested = False
         self.finished = False
         self.loaded = False
+        self.actual_media_title = ""
         self.image_visible=False
         self.pending_bookmark = False
         self.paused_state = None
@@ -210,6 +216,9 @@ class PlaybackDialog(wx.Dialog):
             index = SEEK_STEPS.index(self.seek_step) + (1 if action == "step-up" else -1)
             self.seek_step = SEEK_STEPS[max(0, min(len(SEEK_STEPS) - 1, index))]
             self.settings["seekStep"] = self.seek_step
+            if getattr(self,'store',None):
+                try:self.store.configure({'seekStep':self.seek_step})
+                except OSError:ui.message('Nie udało się zapisać kroku przewijania.')
             ui.message(f"Krok przewijania: {self.seek_step} sekund.")
         elif action in ("volume-up", "volume-down"):
             value = max(0, min(100, self.volume.GetValue() + (5 if action == "volume-up" else -5)))
@@ -265,24 +274,54 @@ class PlaybackDialog(wx.Dialog):
             self.pending_bookmark = True
             self.player.request_property("time-pos", 7401)
 
-    def finish_episode(self):
-        if self.finished or self.material.kind in ("LIVE","CANAL","CANAL_LIVE","POLSAT","POLSAT_LIVE","PLAYERPL","PLAYERPL_LIVE"):
+    def finish_episode(self,content_end=False):
+        if self.finished or self.material.kind in ("LIVE","CANAL_LIVE","POLSAT_LIVE","PLAYERPL_LIVE"):
             return
+        if self.material.kind in ('POLSAT','CANAL','PLAYERPL') and not content_end:return
         self.finished = True
-        if self.store:
+        if self.store and self.material.kind not in ('POLSAT','CANAL','PLAYERPL'):
             try:
                 self.store.mark_watched(self.material)
                 parent=self.GetParent()
                 if hasattr(parent,'refresh_watched_labels'):parent.refresh_watched_labels()
             except OSError as error:
                 ui.message("Nie udało się zapisać oznaczenia obejrzane: " + str(error))
-        if self.settings["afterEnd"] == "next" and self.material.kind == "EPISODE":
-            ui.message("Obejrzane.")
-            self.next_requested = True
-            self.stop_playback()
+        if self.settings["afterEnd"] == "next" and (self.material.kind == "EPISODE" or self.material.kind in ("POLSAT","CANAL","PLAYERPL") and self.material.episode_number>0):
+            if getattr(self,'on_next',None):self.on_next(self.material)
+            else:
+                self.next_requested = True
+                ui.message("Obejrzane.")
+                self.stop_playback()
         else:
             self.send("set_property", "pause", True)
             self.report_error("Obejrzane. Odtwarzanie zakończone.")
+
+    def load_next(self, material, display_title=None):
+        """Replace the media while retaining this window, keyboard focus and seek step."""
+        self.playback_generation += 1
+        if self.player:self.player.close()
+        self.player=None
+        self.material=material
+        self.display_title=display_title or material.title
+        self.SetTitle('TV Player — '+self.display_title)
+        self.automatic_transition=True
+        self.finished=self.next_requested=self.loaded=False
+        self.actual_media_title=''
+        self.from_bookmark=False
+        self.resume_at=0
+        self.position=self.duration=0
+        self.last_save=0
+        self.last_second=-1
+        self.pending_bookmark=False
+        self.pending_audio=self.selected_audio=self.paused_state=None
+        self.audio_ids=[];self.audio_labels=[]
+        self.announce_after_seek=False
+        self.image_visible=False
+        if hasattr(self,'image_button'):self.image_button.SetLabel('Pokaż obraz')
+        self.pause.SetLabel('Pauza')
+        self.audio.SetLabel('Ścieżka audio / audiodeskrypcja')
+        self.status.SetLabel('Łączenie z TV Player…')
+        threading.Thread(target=self.fetch,args=(material,),daemon=True).start()
 
     def fetch(self, material):
         try:
@@ -293,16 +332,32 @@ class PlaybackDialog(wx.Dialog):
                 raise CatalogError(str(error)) from error
             url = resolve(material, allow_drm=True, web=True)
         except Exception as error:
-            message = str(error) if isinstance(error, CatalogError) else "Nie udało się przygotować odtwarzania."
-            wx.CallAfter(self.report_error, message)
+            from .purchase import PurchaseRequired
+            if isinstance(error,PurchaseRequired):wx.CallAfter(self.offer_purchase,str(error))
+            else:
+                message = str(error) if isinstance(error, CatalogError) else "Nie udało się przygotować odtwarzania."
+                wx.CallAfter(self.report_error, message)
             return
         wx.CallAfter(self.start, url)
+
+    def offer_purchase(self,message):
+        if not self.alive:return
+        self.purchase_pending=True
+        self.report_error(message)
+        if self.automatic_transition:return
+        from .purchase import open_page
+        try:
+            open_page(self.material,self.settings.get('loginBrowser','default'))
+            self.status.SetLabel('Otworzono oficjalną stronę materiału. Dostęp lub pakiet możesz kupić w przeglądarce.')
+            ui.message('Otworzono stronę materiału w przeglądarce. Zakup dokończ na stronie dostawcy.')
+        except (OSError,ValueError):self.report_error('Nie udało się otworzyć strony materiału. Sprawdź wybór przeglądarki w ustawieniach.')
 
     def start(self, url):
         if not self.alive:
             return
         if not isinstance(url,OfficialSource):
             self.report_error('Niepoprawne źródło materiału TVP.');return
+        generation=getattr(self,'playback_generation',0)
         handle=self.video.GetHandle()
         started=time.monotonic()
         def diagnostic(message):
@@ -333,17 +388,19 @@ class PlaybackDialog(wx.Dialog):
                 elif stalled<1:recorded=False
         threading.Thread(target=audit,daemon=True).start()
         pending=[];gate=threading.Lock();attached=[False]
+        def deliver(event):
+            if self.alive and generation==getattr(self,'playback_generation',0):self.handle_event(event)
         def packet(event):
             with gate:
                 if not attached[0]:pending.append(event);return
-            wx.CallAfter(self.handle_event,event)
+            wx.CallAfter(deliver,event)
         def attach(player):
-            if not self.alive:player.close();return
+            if not self.alive or generation!=getattr(self,'playback_generation',0):player.close();return
             self.player=player
             diagnostic(f'player attached after {time.monotonic()-started:.3f} seconds')
             with gate:
                 attached[0]=True;queued=list(pending);pending.clear()
-            for event in queued:self.handle_event(event)
+            for event in queued:deliver(event)
         def worker():
             try:
                 from .webPlayer import WebPlayer
@@ -376,6 +433,16 @@ class PlaybackDialog(wx.Dialog):
         if not self.alive:
             return
         name = event.get("event")
+        if name == 'content-start' and self.material.kind=='POLSAT':
+            title=event['title']
+            expected,actual=episode_number(self.material),title_number(title)
+            if expected and actual and expected!=actual:
+                self.report_error('Polsat uruchomił inny odcinek: '+title+'. Zatrzymano odtwarzanie, aby nie wyświetlać błędnej nazwy.')
+                self.next_requested=False
+                self.stop_playback()
+                return
+            self.actual_media_title=title
+            return
         if name == "addon-command":
             action = event.get("action")
             if action == "focus-controls":
@@ -435,7 +502,7 @@ class PlaybackDialog(wx.Dialog):
                 self.send('set_property','volume',self.settings['volume'])
             self.status.SetLabel("Odtwarzanie materiału.")
             self.bookmark_button.Enable(self.material.kind not in ("LIVE","CANAL","CANAL_LIVE","POLSAT","POLSAT_LIVE","PLAYERPL","PLAYERPL_LIVE"))
-            ui.message("Rozpoczęto odtwarzanie.")
+            if not getattr(self,'automatic_transition',False):ui.message("Rozpoczęto odtwarzanie.")
         elif name == "playback-restart" and self.announce_after_seek:
             self.announce_after_seek = False
             self.announce_time()
@@ -443,7 +510,7 @@ class PlaybackDialog(wx.Dialog):
             self.report_error(event["message"])
         elif name == "end-file":
             if event.get("reason") == "eof":
-                self.finish_episode()
+                self.finish_episode(content_end=event.get('content_end') is True)
             elif event.get("reason") == "error":
                 self.report_error("Błąd odtwarzania strumienia TVP.")
         elif name == "property-change":

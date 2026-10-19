@@ -15,6 +15,7 @@ AGENT={'application':'native','build':22300,'deviceType':'tv','os':'android','pl
 
 
 class PolsatError(Exception):pass
+class PolsatAccessDenied(PolsatError):pass
 
 
 class NoRedirect(HTTPRedirectHandler):

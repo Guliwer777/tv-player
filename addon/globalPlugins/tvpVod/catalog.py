@@ -108,35 +108,44 @@ def series_folder(material):
 
 
 def following_episode(material, folder):
-    """Return the next real episode, including a transition to another season."""
-    if material.kind != "EPISODE":
-        return None
-    if folder is None or folder.kind != "SEASON":
-        metadata = api(f"products/vods/{material.id}")
-        season = metadata.get("season") or {}
-        serial = season.get("serial") or {}
-        if not season.get("id") or not serial.get("id"):
-            return None
-        folder = Folder(season["id"], season.get("title") or "Odcinki", "SEASON",
-                        f"products/vods/serials/{serial['id']}/seasons/{season['id']}/episodes")
-    episodes, _ = browse(folder)
-    index = next((index for index, item in enumerate(episodes) if item.id == material.id), -1)
-    if index < 0:
-        return None
-    if index + 1 < len(episodes):
-        return episodes[index + 1], folder, episodes
-    serial_resource = folder.resource.rsplit("/", 2)[0]
-    seasons = api(serial_resource)
-    found = False
-    for season in seasons:
-        if found:
-            next_folder = Folder(season["id"], season.get("title") or "Odcinki", "SEASON",
-                                 f"{serial_resource}/{season['id']}/episodes")
-            items, _ = browse(next_folder)
-            if items:
-                return items[0], next_folder, items
-        if season["id"] == folder.id:
-            found = True
+    """Resolve the playing episode's own series; choose by numeric episode/season."""
+    if material.kind=='PLAYERPL':
+        from .playerpl import following_episode as player_next
+        return player_next(material,folder)
+    if material.kind=='CANAL':
+        from .canal import following_episode as canal_next
+        return canal_next(material,folder)
+    if material.kind=='POLSAT':
+        from .polsat import following_episode as polsat_next
+        return polsat_next(material,folder)
+    if material.kind!='EPISODE':return None
+    try:from .episodeOrder import positive,next_numbered,episode_number
+    except ImportError:from episodeOrder import positive,next_numbered,episode_number
+    metadata=api(f'products/vods/{material.id}')
+    season=metadata.get('season') or {};serial=season.get('serial') or {}
+    if not season.get('id') or not serial.get('id'):return None
+    from dataclasses import replace
+    current=replace(material,episode_number=positive(metadata.get('number')) or material.episode_number)
+    if not episode_number(current):return None
+    resource=f"products/vods/serials/{serial['id']}/seasons"
+    folder=Folder(season['id'],season.get('title') or 'Odcinki','SEASON',resource+f"/{season['id']}/episodes")
+    episodes,_=browse(folder)
+    target=next_numbered(episodes,current)
+    if target:return target,folder,episodes
+    # Never infer a season transition from an arbitrary server list position.
+    number=positive(season.get('number'))
+    if not number:return None
+    seasons=api(resource)
+    following=sorted((row for row in seasons if positive(row.get('number'))>number),key=lambda row:positive(row['number']))
+    for row in following:
+        next_folder=Folder(row['id'],row.get('title') or 'Odcinki','SEASON',resource+f"/{row['id']}/episodes")
+        items,_=browse(next_folder)
+        numbered=[item for item in items if item.episode_number>0 and item.id!=material.id and (not material.url or item.url!=material.url)]
+        if not numbered:continue
+        first=min(item.episode_number for item in numbered)
+        matches={item.id:item for item in numbered if item.episode_number==first}
+        if len(matches)!=1:raise CatalogError('Nie ustalono jednoznacznie pierwszego odcinka kolejnego sezonu.')
+        return next(iter(matches.values())),next_folder,items
     return None
 
 
@@ -160,6 +169,10 @@ class Material:
     playback_mode: str = ""
     provider_id: str = ""
     access_status: str = ""
+    episode_number: int = 0
+    season_id: str = ""
+    series_id: str = ""
+    season_number: int = 0
 
     @property
     def label(self):
@@ -191,6 +204,12 @@ def material_description(material):
     if not isinstance(payload,dict):raise CatalogError('Nieznany format opisu TVP.')
     return description_from(payload) or material.description
 
+def episode_number_value(item):
+    try:from .episodeOrder import positive
+    except ImportError:from episodeOrder import positive
+    return positive(item.get('number')) if item.get('type')=='EPISODE' else 0
+
+
 def parse_items(payload):
     if not isinstance(payload, dict) or not isinstance(payload.get("items"), list):
         raise CatalogError("Nieznany format odpowiedzi TVP VOD.")
@@ -203,7 +222,8 @@ def parse_items(payload):
             continue
         description = description_from(item)
         result.append(Material(item["id"], str(item["title"]), description, url,
-                               str(item.get("type", "VOD")), bool(item.get("payable"))))
+                               str(item.get("type", "VOD")), bool(item.get("payable")),
+                               episode_number=episode_number_value(item)))
     return result
 
 

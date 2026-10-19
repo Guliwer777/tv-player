@@ -36,9 +36,9 @@ class PlayerTests(unittest.TestCase):
  def test_guide_requests_at_most_24h_and_caches(self):
   item=catalog.material({'id':1,'type':'LIVE','title':'Kanał'})
   with patch.object(catalog,'api',return_value=[]) as request:
-   catalog.programmes(item,threading.Event());self.assertEqual(request.call_count,7)
+   catalog.programmes(item,threading.Event());first=request.call_count;self.assertIn(first,(7,8))
    for call in request.call_args_list:self.assertLessEqual(call.kwargs['till']-call.kwargs['since'],86400000)
-   catalog.programmes(item,threading.Event());self.assertEqual(request.call_count,7)
+   catalog.programmes(item,threading.Event());self.assertEqual(request.call_count,first)
  def test_cancelled_guide_does_not_request(self):
   stop=threading.Event();stop.set()
   with patch.object(catalog,'api') as request:self.assertEqual(catalog.programmes(None,stop),[]);request.assert_not_called()

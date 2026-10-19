@@ -52,7 +52,11 @@ def material(row):
     if not title:raise ValueError()
     description=plain_text(row.get('description') or row.get('lead',''))
     description+='\n'+('Według katalogu materiał wymaga płatnego dostępu. Uprawnienia konta sprawdza odtwarzacz.' if row.get('payable') else 'Katalog nie oznacza materiału jako płatnego. Logowanie i ostateczne uprawnienia sprawdza odtwarzacz.')
-    return Material(identifier(mid),title,description.strip(),url,'PLAYERPL_LIVE' if kind=='LIVE' else 'PLAYERPL',row.get('payable') is True,provider_id=str(mid))
+    return Material(identifier(mid),title,description.strip(),url,'PLAYERPL_LIVE' if kind=='LIVE' else 'PLAYERPL',row.get('payable') is True,provider_id=str(mid),
+                    episode_number=int(row['episode']) if kind=='EPISODE' else 0,
+                    season_id=str(row['season']['id']) if kind=='EPISODE' else '',
+                    series_id=str(row['season']['serial']['id']) if kind=='EPISODE' else '',
+                    season_number=int(row['season']['number']) if kind=='EPISODE' else 0)
 
 def parse_items(rows):
     out=[]
@@ -177,3 +181,28 @@ def browse(folder,offset=0):
         rows=sorted(rows,key=lambda r:(r.get('episode',0),r.get('id',0)))
         return parse_items(rows[offset:offset+50]),offset+50<len(rows)
     raise CatalogError('Nieznany katalog Playera.')
+
+
+def following_episode(current,folder):
+    from .episodeOrder import next_numbered,positive
+    if not current.episode_number or not current.season_id.isdigit() or not current.series_id.isdigit():return None
+    folder=Folder(identifier('season:'+current.season_id),'Odcinki','PLAYERPL','season:'+current.series_id+':'+current.season_id)
+    def episodes(folder):
+        rows=[];offset=0
+        while offset<10000:
+            page,more=browse(folder,offset);rows.extend(item for item in page if isinstance(item,Material))
+            if not more:return rows
+            offset+=50
+        raise CatalogError('Nie pobrano całej listy odcinków Playera.')
+    items=episodes(folder);target=next_numbered(items,current)
+    if target:return target,folder,items
+    if not current.season_number:return None
+    seasons=api('product/vod/serial/'+current.series_id+'/season/list')
+    for row in sorted((row for row in seasons if positive(row.get('number'))>current.season_number),key=lambda row:positive(row['number'])):
+        next_folder=Folder(identifier('season:'+str(row['id'])),'Sezon '+str(row['number']),'PLAYERPL','season:'+current.series_id+':'+str(row['id']))
+        items=episodes(next_folder);numbered=[item for item in items if item.episode_number>0 and item.provider_id!=current.provider_id]
+        if not numbered:continue
+        minimum=min(item.episode_number for item in numbered);matches={item.id:item for item in numbered if item.episode_number==minimum}
+        if len(matches)!=1:raise CatalogError('Nie ustalono jednoznacznie pierwszego odcinka kolejnego sezonu Playera.')
+        return next(iter(matches.values())),next_folder,items
+    return None

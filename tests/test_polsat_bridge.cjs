@@ -35,5 +35,19 @@ const failed=[];replayVideo.currentTime=1250;replayVideo.paused=false;replayVide
 vm.runInNewContext(precisionSource,replay);replayTick();clock+=46000;replayTick();assert(replayVideo.paused);assert(failed.some(e=>e.event==='player-error'));assert(!failed.some(e=>e.event==='file-loaded'));
 const missing=[];replayVideo.paused=false;replay.window.tvp_bridge.postMessage=p=>missing.push(JSON.parse(p));
 vm.runInNewContext(source.replace('"volume":70','"volume":70,"polsatStart":2100'),replay);replayTick();assert(replayVideo.paused);assert(missing.some(e=>e.event==='player-error'));
+// Resume prompt on an already-watched episode is not a purchase/consent action.
+for(const tag of ['button','div'])for(const start of [0,120]){
+ const clicked=[];let resumeTick;
+ const buttons=['Oglądaj dalej','Oglądaj od początku','Kup dostęp','Akceptuj wszystko'].map(text=>({innerText:text,getBoundingClientRect:()=>({width:clicked.length?0:120}),click(){clicked.push(text);}}));
+ const prompt={...context,document:{cookie:'profile-id=selected',querySelectorAll:selector=>selector.split(',').includes(tag)?buttons:[]},window:{__tvpPolsatProfile:'selected',tvp_bridge:{postMessage(){}},addEventListener(){}},setInterval:fn=>resumeTick=fn};
+ vm.runInNewContext(source.replace('"volume":70','"volume":70,"start":'+start),prompt);resumeTick();resumeTick();
+ assert.deepEqual(clicked,[start?'Oglądaj dalej':'Oglądaj od początku']);
+}
+// Main-content resume is applied once; an advert and later user seeks stay untouched.
+let mainTick,state='PLAYING_LINEAR_AD';const mainVideo={...v,duration:1300,currentTime:262,seeking:false};
+const mainContext={...context,location:{origin:'https://polsatboxgo.pl',pathname:'/wideo/serial/1/ogladaj'},document:{cookie:'profile-id=selected',querySelectorAll:selector=>selector==='video'?[mainVideo]:[]},window:{__tvpPolsatProfile:'selected',__tvpPolsatSDK:{getStatus:()=>({state})},tvp_bridge:{postMessage(){}},addEventListener(){}},setInterval:fn=>mainTick=fn};
+vm.runInNewContext(source,mainContext);mainTick();assert.equal(mainVideo.currentTime,262);
+state='PLAYING_CONTENT';mainTick();assert.equal(mainVideo.currentTime,0);
+mainVideo.currentTime=700;mainTick();assert.equal(mainVideo.currentTime,700);
 console.log('Polsat bridge: OK');
 })().catch(e=>{console.error(e);process.exitCode=1;});

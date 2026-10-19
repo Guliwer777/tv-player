@@ -87,6 +87,21 @@ def bootstrap(record):
              'profile-id':record['profile']['id'],'profile-selected-at':time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime())}
     return """(()=>{
 if(location.origin!=='https://polsatboxgo.pl')return;
-for(const [name,value] of Object.entries(%s))document.cookie=name+'='+encodeURIComponent(typeof value==='string'?value:JSON.stringify(value))+'; Path=/; Secure; SameSite=Lax';
-window.__tvpPolsatProfile=%s;
-})();"""%(json.dumps(cookies,ensure_ascii=True),json.dumps(record['profile']['id']))
+const cookies=%s,profile=%s,nonce=%s;
+const read=name=>document.cookie.split(';').map(s=>s.trim()).find(s=>s.startsWith(name+'='))?.slice(name.length+1);
+let current=null,previousProfile='';
+try{current=JSON.parse(decodeURIComponent(read('user-session')||''));previousProfile=decodeURIComponent(read('profile-id')||'').replace(/^"|"$/g,'');}catch(_){}
+const changed=previousProfile!==profile||['id','key','keyExpirationTime'].some(key=>current?.[key]!==cookies['user-session'][key]);
+for(const [name,value] of Object.entries(cookies))document.cookie=name+'='+encodeURIComponent(typeof value==='string'?value:JSON.stringify(value))+'; Path=/; Secure; SameSite=Lax';
+window.__tvpPolsatProfile=profile;
+// The first HTTP response precedes AddUserScript and can contain an anonymous page.
+// Reload once with the paired cookies before the page starts its authenticated player.
+if(changed){
+ let reload=false;
+ try{if(sessionStorage.getItem('tvPlayerBootstrapReload')!==nonce){sessionStorage.setItem('tvPlayerBootstrapReload',nonce);reload=true;}}catch(_){}
+ if(reload){
+  const refresh=()=>location.reload();
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',refresh,{once:true});else setTimeout(refresh,0);
+ }
+}
+})();"""%(json.dumps(cookies,ensure_ascii=True),json.dumps(record['profile']['id']),json.dumps(uuid.uuid4().hex))

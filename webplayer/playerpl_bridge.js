@@ -66,6 +66,7 @@
     }catch(_){notice('Player nie potwierdził polecenia. Funkcja może być niedostępna w tym materiale lub podczas reklam.');}
   };
   setInterval(()=>{
+    if(window.__tvpPlayerEnded){const v=video();if(v)v.pause();return;}
     const v=video();
     if(!v){
       const manager=document.querySelector('.profile-manager'),expected=window.__tvpPlayerProfile;

@@ -55,6 +55,8 @@ Polsat Box Go — dostęp do VOD: po zaznaczeniu filmu, odcinka lub serialu doda
 Polsat Box Go: lista kanałów pokazuje również tytuł i godziny bieżącej audycji według ustawionej kolejności informacji. Dane są pobierane zbiorczo, a ramówka kilku dni po zaznaczeniu stacji.
 Polsat Box Go (wersja testowa): menu główne → Polsat Box Go → Logowanie. Zatwierdź kod w wybranej przeglądarce, a następnie wybierz Profil. Sesja i profil są zapisywane lokalnie, szyfrowane przez Windows. Przed odtwarzaniem dodatek wymaga potwierdzenia wybranego profilu przez serwer; nie wybiera automatycznie pierwszego profilu. Katalog, kanały i ramówka wymagają połączenia konta. Lista kanałów pokazuje tylko stacje, dla których serwer potwierdził dostęp na wybranym koncie i profilu, bez dodatkowego zakupu. Pierwsze wczytanie może potrwać kilkanaście sekund. Dostęp jest ponownie sprawdzany przed odtwarzaniem. F5 odświeża listę i uprawnienia. Start kanału i cofanie bieżącej audycji sprawdzono na wybranych kanałach. Od początku odczytuje dokładną oś czasu manifestu DASH, przelicza godzinę audycji na pozycję filmu i weryfikuje pozycję oraz dalszy postęp odtwarzania. Nie klika przycisków strony ani nie ocenia pierwszej sceny. Brak osi czasu lub pozycji w buforze oznacza brak potwierdzenia. Podczas przygotowania dźwięk jest wyciszony. Jeśli początku nie uda się potwierdzić, materiał zostaje zatrzymany. Wcześniejsze zakończone audycje nie są obecnie oznaczane jako dostępne do odtworzenia. Ścieżki audio i pozostałe materiały wymagają dalszych testów. Odtwarzanie korzysta z oficjalnej strony w WebView2.
 F5 w ramówce odświeża otwarty dzień lub wyniki, zachowując zaznaczenie i fokus; nie wraca do listy dni.
+Gdy TVP VOD lub Polsat potwierdzi wymagany zakup przy ręcznym otwieraniu materiału, dodatek otwiera jego oficjalną stronę w przeglądarce wybranej w ustawieniach. Menu kontekstowe płatnego materiału lub pozycji bez dostępu umożliwia także otwarcie strony zakupu lub pakietu. Logowanie i płatność odbywają się na stronie dostawcy; przeglądarka może wymagać oddzielnego zalogowania. Po zakupie wróć do wtyczki i otwórz materiał ponownie; w razie potrzeby odśwież listę F5. Błędy sieci nie są uznawane za wymaganie zakupu.
+
 Menu główne: TVP VOD (Kategorie, Wyszukaj, Konto TVP VOD), CANAL+ (Katalog, Logowanie), TVP Sport oraz wspólne ulubione, zakładki i ustawienia. Kanały CANAL+ znajdziesz w Katalogu pod Kanały na żywo. Następnie wybierz Wszystkie albo kategorię, np. Sport lub Dla dzieci. To podział tematyczny dodatku; nierozpoznane kanały są w Inne. Backspace wraca o poziom, Escape do głównej listy.
 Obraz CANAL+ jest domyślnie ukryty. Przyciski Pokaż obraz i Ukryj obraz sterują jego osobnym oknem.
 TV Player — skróty klawiaturowe
@@ -99,6 +101,7 @@ W odtwarzaczu nie ma skrótów z Altem ani skrótu samo Z do zakładki. Używaj 
 F5 w ramówce CANAL+ ponawia sprawdzanie wcześniejszych audycji, gdy żaden materiał nie jest odtwarzany. Przy aktywnym odtwarzaczu odświeża ramówkę bez uruchamiania drugiej sesji. Backspace z audycji zachowuje wybrany dzień.
 Ctrl+R — dodaj przypomnienie o zaznaczonej przyszłej audycji lub transmisji.
 Ctrl+Shift+R — zaplanuj automatyczne odtwarzanie zaznaczonej przyszłej audycji lub transmisji. Skróty działają na listach audycji, wynikach wyszukiwania i transmisjach TVP Sport. Nie działają na samym kanale ani dniu programu. Plany są w menu Zaplanowane seanse.
+Kolejny odcinek jest wybierany według numeru odcinka i sezonu, nigdy po pozycji na liście. Przy powielonych lub nieznanych numerach dodatek nie zgaduje. TVP sprawdza serię aktualnie oglądanego materiału niezależnie od otwartego katalogu. Polsat używa oficjalnego zdarzenia końca odtwarzania, odrębnego od reklam. CANAL+ i Player wymagają potwierdzenia końca właściwego materiału; sam koniec elementu wideo nie uruchamia kolejnego odcinka.
 F1 — pokaż tę listę skrótów.
 
 Katalog i zakładki:
@@ -115,7 +118,8 @@ Ctrl+Spacja — pauza lub wznowienie.
 Alt+F4 — ukryj okno; odtwarzanie i tryb poleceń działają dalej w tle.
 Ctrl+T — wypowiedz bieżący czas i pełny czas trwania materiału.
 Ctrl+strzałka w lewo/prawo — cofnij lub przewiń o wybrany krok.
-Ctrl+strzałka góra/dół — zwiększ lub zmniejsz krok: 5, 10, 15, 30, 60 sekund.
+Ctrl+strzałka góra/dół — zwiększ lub zmniejsz krok: 5, 10, 15, 30, 60 sekund. Wybrany krok jest zapisywany i zachowywany przy kolejnych materiałach.
+Automatyczne przejście do kolejnego odcinka odbywa się w tym samym oknie, bez pokazywania listy i dodatkowych komunikatów rozpoczęcia. Błędy są nadal ogłaszane.
 Ctrl+Shift+strzałka góra/dół — zwiększ lub zmniejsz głośność o 5 procent.
 Ctrl+Z — utwórz zakładkę w bieżącym miejscu.
 Ctrl+1, Ctrl+2, Ctrl+3 — wybierz pierwszą, drugą lub trzecią ścieżkę audio i ogłoś jej nazwę.

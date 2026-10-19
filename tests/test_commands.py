@@ -42,6 +42,47 @@ class CommandTests(unittest.TestCase):
             dialog.finished=False;dialog.material.kind='LIVE';finish(dialog)
             self.assertEqual(len(marked),1)
 
+    def test_provider_next_requires_official_content_end_and_number(self):
+        for provider in ('POLSAT','PLAYERPL','CANAL'):
+            stopped=[];marked=[]
+            finish=method('playbackDialog.py','PlaybackDialog','finish_episode',{'ui':SimpleNamespace(message=lambda text:None)})
+            dialog=SimpleNamespace(finished=False,material=SimpleNamespace(kind=provider,episode_number=2),settings={'afterEnd':'next'},store=SimpleNamespace(mark_watched=marked.append),next_requested=False,stop_playback=lambda:stopped.append(1))
+            finish(dialog);self.assertFalse(dialog.next_requested)
+            finish(dialog,content_end=True);finish(dialog,content_end=True)
+            self.assertTrue(dialog.next_requested);self.assertEqual(stopped,[1]);self.assertEqual(marked,[])
+
+    def test_polsat_actual_episode_mismatch_stops_instead_of_leaving_old_title(self):
+        for actual in (1310,1311):
+            stopped=[];errors=[]
+            handle=method('playbackDialog.py','PlaybackDialog','handle_event',{
+                'episode_number':lambda item:item.episode_number,
+                'title_number':lambda title:int(title.rsplit(' ',1)[1])})
+            dialog=SimpleNamespace(alive=True,material=SimpleNamespace(kind='POLSAT',episode_number=1310),
+                actual_media_title='',next_requested=False,report_error=errors.append,stop_playback=lambda:stopped.append(True))
+            title='Samo życie - Odcinek '+str(actual)
+            handle(dialog,{'event':'content-start','title':title})
+            self.assertEqual(bool(stopped),actual!=1310)
+            self.assertEqual(dialog.actual_media_title,title if actual==1310 else '')
+            self.assertEqual(bool(errors),actual!=1310)
+
+    def test_next_callback_keeps_player_alive_and_does_not_announce_transition(self):
+        spoken=[];next_items=[];stopped=[]
+        finish=method('playbackDialog.py','PlaybackDialog','finish_episode',{'ui':SimpleNamespace(message=spoken.append)})
+        material=SimpleNamespace(kind='POLSAT',episode_number=1310)
+        dialog=SimpleNamespace(finished=False,material=material,store=None,settings={'afterEnd':'next'},
+            next_requested=False,on_next=next_items.append,stop_playback=lambda:stopped.append(True))
+        finish(dialog,content_end=True);finish(dialog,content_end=True)
+        self.assertEqual(next_items,[material]);self.assertEqual(stopped,[]);self.assertEqual(spoken,[])
+        self.assertFalse(dialog.next_requested,'manual stop must not schedule another episode')
+
+    def test_seek_step_is_persisted_for_future_materials(self):
+        saved=[]
+        execute=method('playbackDialog.py','PlaybackDialog','execute_command',{
+            'SEEK_STEPS':[5,10,15,30,60],'ui':SimpleNamespace(message=lambda text:None)})
+        dialog=SimpleNamespace(alive=True,seek_step=30,settings={'seekStep':30},store=SimpleNamespace(configure=saved.append))
+        execute(dialog,'step-up')
+        self.assertEqual(dialog.seek_step,60);self.assertEqual(saved,[{'seekStep':60}])
+
     def test_configured_timeout_and_renewal(self):
         events=[]
         mode=commands.CommandMode(events.append,lambda:15)

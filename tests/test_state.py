@@ -138,10 +138,10 @@ class PersistenceTests(unittest.TestCase):
 class NextEpisodeTests(unittest.TestCase):
     def test_last_episode_moves_to_first_episode_of_next_nonempty_season(self):
         current = catalog.Material(12, "Odcinek 2", "", "", "EPISODE", False)
-        following = catalog.Material(13, "Odcinek 3", "", "", "EPISODE", False)
+        following = catalog.Material(13, "Odcinek 3", "", "", "EPISODE", False,episode_number=3)
         folder = catalog.Folder(10, "Sezon 1", "SEASON", "products/vods/serials/1/seasons/10/episodes")
         with patch.object(catalog, "browse", side_effect=[([current], False), ([], False), ([following], False)]), \
-             patch.object(catalog, "api", return_value=[{"id": 10}, {"id": 20}, {"id": 30}]) as api:
+             patch.object(catalog, "api", side_effect=[{"number":2,"season":{"id":10,"number":1,"serial":{"id":1}}},[{"id":30,"number":3},{"id":10,"number":1},{"id":20,"number":2}]]) as api:
             material, next_folder, items = catalog.following_episode(current, folder)
         self.assertEqual(api.call_args.args[0], "products/vods/serials/1/seasons")
         self.assertEqual(material.id, 13)
@@ -150,6 +150,6 @@ class NextEpisodeTests(unittest.TestCase):
     def test_final_episode_stops_and_movies_do_not_autoplay(self):
         episode = catalog.Material(12, "Episode", "", "", "EPISODE", False)
         folder = catalog.Folder(10, "Season", "SEASON", "products/vods/serials/1/seasons/10/episodes")
-        with patch.object(catalog, "browse", return_value=([episode], False)), patch.object(catalog, "api", return_value=[{"id": 10}]):
+        with patch.object(catalog, "browse", return_value=([episode], False)), patch.object(catalog, "api", return_value={"season":{"id":10,"number":1,"serial":{"id":1}}}):
             self.assertIsNone(catalog.following_episode(episode, folder))
         self.assertIsNone(catalog.following_episode(catalog.Material(1, "Film", "", "", "VOD", False), None))

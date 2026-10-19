@@ -372,7 +372,7 @@ class CatalogDialog(wx.Dialog):
             self.current_folder, self.offset, self.heading = folder, 0, item.label
             self.run_task(lambda: browse(folder))
         else:
-            if self.playback and self.playback.alive and self.playback.material.id==item.id:
+            if self.playback and self.playback.alive and self.playback.material.id==item.id and not getattr(self.playback,'purchase_pending',False):
                 self.playback.execute_command('focus-player')
             elif item.kind=='POLSAT_LIVE':self.choose_polsat_channel(item)
             elif item.kind=="CANAL_LIVE":self.choose_channel(item)
@@ -579,14 +579,24 @@ class CatalogDialog(wx.Dialog):
         elif event['end'].timestamp()>time.time():self.on_play(material,force=True)
         else:ui.message('Nie potwierdzono dostępu do wcześniejszej emisji.')
 
+    def open_purchase(self,item):
+        from .purchase import open_page
+        try:
+            open_page(item,self.store.settings.get('loginBrowser','default'))
+            ui.message('Otworzono oficjalną stronę materiału. Dostęp lub pakiet możesz kupić w przeglądarce.')
+        except (OSError,ValueError):ui.message('Nie udało się otworzyć oficjalnej strony materiału. Sprawdź wybór przeglądarki w ustawieniach.')
+
     def on_play(self, material, resume_at=None, background=False,live_start=None,force=False):
         if not self.alive:
             return
-        if self.playback and self.playback.alive and self.playback.material.id == material.id and resume_at is None and live_start is None and not force:
+        if self.playback and self.playback.alive and self.playback.material.id == material.id and not getattr(self.playback,'purchase_pending',False) and resume_at is None and live_start is None and not force:
             if not background:
                 self.playback.Show()
                 self.playback.Raise()
                 self.playback.pause.SetFocus()
+            return
+        if material.kind=='CANAL' and getattr(material,'access_status','')=='brak dostępu':
+            self.open_purchase(material)
             return
         self.generation += 1
         if self.playback and self.playback.alive:
@@ -598,7 +608,7 @@ class CatalogDialog(wx.Dialog):
                                        on_bookmark=lambda mat, pos: self.save_bookmark(mat, pos, context),
                                        resume_at=resume_at,
                                        on_progress=lambda mat, pos: self.store.save_session(mat, pos, context),
-                                       on_stopped=self.playback_stopped,live_start=live_start,display_title=display_title)
+                                       on_stopped=self.playback_stopped,on_next=self.advance_episode,live_start=live_start,display_title=display_title)
         self.playback.navigation_context=context
         self.refresh_title()
         self.update_playback_title(self.playback)
@@ -608,13 +618,14 @@ class CatalogDialog(wx.Dialog):
 
     def update_playback_title(self,playback):
         if playback.material.kind!='EPISODE':return
+        material,display_title=playback.material,playback.display_title
         def worker():
             from .playbackTitle import detailed
-            try:title=detailed(playback.material,playback.display_title)
+            try:title=detailed(material,display_title)
             except Exception:return
             wx.CallAfter(complete,title)
         def complete(title):
-            if self.alive and self.playback is playback and playback.alive:
+            if self.alive and self.playback is playback and playback.alive and playback.material.id==material.id:
                 playback.display_title=title;playback.SetTitle('TV Player — '+title)
                 self.refresh_title()
         threading.Thread(target=worker,daemon=True).start()
@@ -631,6 +642,7 @@ class CatalogDialog(wx.Dialog):
 
     def playback_stopped(self, material, next_requested):
         background = not self.playback.IsShown() if self.playback else False
+        origin=self.playback
         self.playback = None
         if self.alive:
             self.refresh_title()
@@ -639,30 +651,46 @@ class CatalogDialog(wx.Dialog):
             if self.IsShown():
                 self.list.SetFocus()
             if next_requested:
+                if origin and getattr(origin,'navigation_context',None):self.restore_playback_context(origin)
                 self.advance_episode(material, background=background)
 
     def advance_episode(self, material, background=False):
         generation = self.generation
         folder = self.current_folder
-        ui.message("Sprawdzanie następnego odcinka.")
+        origin=self.playback if self.playback and self.playback.alive and self.playback.material.id==material.id else None
+        if origin and getattr(origin,'navigation_context',None):folder=unpack_frame(origin.navigation_context['current'])[1]
         def worker():
             try:
                 result, error = following_episode(material, folder), ""
             except Exception:
                 result, error = None, "Nie udało się pobrać następnego odcinka."
-            wx.CallAfter(self.complete_next, generation, result, error, background)
+            wx.CallAfter(self.complete_next, generation, result, error, background, origin)
         threading.Thread(target=worker, daemon=True).start()
 
-    def complete_next(self, generation, result, error, background=False):
-        if not self.alive or generation != self.generation:
-            return
+    def complete_next(self, generation, result, error, background=False, origin=None):
+        if not self.alive:return
+        if origin:
+            if self.playback is not origin or not origin.alive:return
+        elif generation!=self.generation:return
         if result is None:
+            if origin:origin.next_requested=False
             ui.message(error or "Brak następnego odcinka.")
             return
         material, folder, items = result
-        self.current_folder, self.offset, self.heading = folder, 0, folder.title
         selection = next(index for index, item in enumerate(items) if item.id == material.id)
-        self.set_items(items, selection)
+        if origin:
+            context={'history':origin.navigation_context['history'],
+                     'current':pack_frame(items,folder,0,folder.title,selection)}
+            origin.navigation_context=context
+            origin.on_progress=lambda mat,pos:self.store.save_session(mat,pos,context)
+            origin.on_bookmark=lambda mat,pos:self.save_bookmark(mat,pos,context)
+            from .playbackTitle import contextual
+            origin.load_next(material,contextual(material,context))
+            self.refresh_title()
+            self.update_playback_title(origin)
+            return
+        self.current_folder, self.offset, self.heading = folder, 0, folder.title
+        self.set_items(items, selection, focus=False)
         wx.CallAfter(self.on_play, material, background=background)
 
     def on_back(self):
@@ -845,6 +873,7 @@ class CatalogDialog(wx.Dialog):
                 action('Przenieś do folderu…',self.move_favorite)
                 action('Usuń z ulubionych',self.delete_favorite)
         if isinstance(item,Material):
+            if item.payable or item.access_status=='brak dostępu':action('Otwórz stronę materiału — zakup lub pakiet',lambda:self.open_purchase(item))
             if self.has_epg(item):action('Program stacji — przypomnienia i oglądanie',lambda:self.open_epg(None))
             if item.kind=='LIVE' and item.start and item.end:
                 from datetime import datetime,timezone

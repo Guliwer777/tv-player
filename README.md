@@ -1,6 +1,6 @@
 # TV Player — dodatek do NVDA
 
-Autor: **Guliwer**. Wydanie **0.28.1-dev — beta**.
+Autor: **Guliwer**. Wydanie **0.28.7-dev — beta**.
 
 Dostępny z klawiatury interfejs do TVP VOD, TVP Sport, CANAL+, Polsat Box Go
 oraz eksperymentalnie Playera. Projekt niezależny, nie jest oficjalną aplikacją
@@ -28,6 +28,15 @@ z oficjalnego źródła Microsoft.
 - Zakładki, wznowienie i oznaczanie obejrzanych w obsługiwanych materiałach.
 - Praca w tle, tryb poleceń i wybór wyjścia dźwięku (Windows 11).
 - Pamięć ramówek na dysku: osobno kanał i dzień, limit 30 MB i automatyczne czyszczenie.
+
+## Zmiany w 0.28.7
+
+- Wybór kolejnego odcinka według numeru, także między sezonami w obsługiwanych katalogach.
+- Poprawki Polsatu: blokada samodzielnego przełączania filmu pod starą nazwą, sprawdzanie faktycznego numeru odcinka i przygotowanie sesji przy pierwszym odtwarzaniu.
+- Automatyczna zmiana odcinka w tym samym oknie, bez pokazywania listy i dodatkowych komunikatów. Wybrany krok przewijania jest zapisywany.
+- Otwieranie oficjalnej strony materiału po potwierdzonej odmowie dostępu w TVP VOD i Polsacie; CANAL+ korzysta także z oznaczenia braku dostępu. Menu kontekstowe oznaczonych płatnych pozycji pozwala otworzyć stronę dostawcy, również w Playerze. Zakup i ewentualne osobne logowanie odbywają się w przeglądarce.
+
+Przejścia odcinków sprawdzono na wybranych serialach TVP i Polsatu. Automatyczne przejścia w CANAL+ i Playerze nadal wymagają potwierdzenia podczas odtwarzania. Player nie otwiera jeszcze automatycznie strony zakupu po odmowie jego odtwarzacza.
 
 ## Skróty
 

@@ -69,7 +69,9 @@ def parse(source,url,title):
         live="https://www.canalplus.com/pl/program-tv/"
         result.insert(0,Folder(identifier(live),"Kanały na żywo","CANAL","live","Lista kanałów z uwzględnieniem blokad dostępu zwróconych przez CANAL+.",live))
     if re.search(r'/[hp]/[0-9]+(?:_[0-9]+)?/?$',urlsplit(url).path):
-        result.insert(0,Material(identifier(url),title+' — otwórz odtwarzacz CANAL+','Oficjalna strona materiału. Zaloguj się w oknie CANAL+, a następnie wybierz Oglądaj. Skróty kontrolują dostępny główny element wideo.',url,'CANAL',False))
+        try:from .episodeOrder import title_number
+        except ImportError:from episodeOrder import title_number
+        result.insert(0,Material(identifier(url),title+' — otwórz odtwarzacz CANAL+','Oficjalna strona materiału. Zaloguj się w oknie CANAL+, a następnie wybierz Oglądaj. Skróty kontrolują dostępny główny element wideo.',url,'CANAL',False,episode_number=title_number(title)))
     return result,False
 
 def browse(folder):
@@ -80,3 +82,20 @@ def browse(folder):
     url=HOME if folder.resource=='root' else folder.resource
     rows,more=parse(fetch(url),url,folder.title)
     return [row for row in rows if not isinstance(row,Folder) or row.resource!='live'],more
+
+
+def following_episode(current,folder):
+    # Only a known episode folder of this series can be used; never recommendations.
+    from .episodeOrder import title_number,next_numbered
+    if not title_number(current.title) or not folder or folder.kind!='CANAL' or folder.resource==current.url:return None
+    prefix=re.split(r'\b(?:sezon|odc(?:inek|\.)?)\s*[:.]?\s*\d+',current.title,flags=re.I)[0].strip(' —-:')
+    if not prefix:return None
+    items,_=browse(folder)
+    candidates=[]
+    for item in items:
+        if not item.title.casefold().startswith(prefix.casefold()) or not title_number(item.title):continue
+        url=item.url if isinstance(item,Material) else item.resource
+        if not re.search(r'/p/\d+(?:_\d+)?/?$',urlsplit(url).path):continue
+        candidates.append(Material(identifier(url),item.title,item.description,url,'CANAL',False,episode_number=title_number(item.title)))
+    target=next_numbered(candidates,current)
+    return (target,folder,candidates) if target else None

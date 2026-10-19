@@ -4,6 +4,7 @@
   const settings=__SETTINGS__,send=value=>window.tvp_bridge.postMessage(JSON.stringify(value));
   let current=null,loaded=false,lastTracks='',lastTime=-1,lastPause=null,noticeAt=0;
   let audioSwitch=Promise.resolve();
+  let resumeAttempts=0,resumeClickedAt=0,vodPositionDone=false;
   const requestedStart=Number(settings.polsatStart)||0;
   let startDone=!requestedStart,startClicked=false,startFailed=false,startAt=0,startAttempts=0,startStable=0,startLast=-1;
   let desiredVolume=Math.max(0,Math.min(1,Number(settings.volume)/100));
@@ -11,7 +12,7 @@
   const startTarget=requestedStart-timelineOrigin;
   const restoreVolume=v=>{v.volume=desiredVolume;if(typeof setTimeout==='function')setTimeout(()=>{if(v===current)v.volume=desiredVolume;},300);};
   const resume=async v=>{await v.play();restoreVolume(v);};
-  document.addEventListener?.('play',event=>{if(event.target?.tagName==='VIDEO'){restoreVolume(event.target);if(requestedStart&&!startDone)event.target.muted=true;}},true);
+  document.addEventListener?.('play',event=>{if(event.target?.tagName==='VIDEO'){if(window.__tvpPolsatEnded){event.target.pause();return;}restoreVolume(event.target);if(requestedStart&&!startDone)event.target.muted=true;}},true);
   const video=()=>[...document.querySelectorAll('video')].filter(v=>v.readyState>=1&&v.getBoundingClientRect().width>100).sort((a,b)=>b.getBoundingClientRect().width-a.getBoundingClientRect().width)[0];
   const profileOkay=()=>{
     const cookie=document.cookie.split(';').map(v=>v.trim()).find(v=>v.startsWith('profile-id='));
@@ -67,11 +68,29 @@
     }catch(_){send({event:'player-notice',message:'Polsat Box Go nie potwierdził wykonania polecenia. Funkcja może być niedostępna w tym materiale.'});}
   };
   setInterval(()=>{
+    // The official VOD page may wait for a resume/start-over choice before creating its SDK.
+    // These two exact buttons only control our requested material, never consent or purchase.
+    if(!requestedStart&&!window.__tvpPolsatEnded&&profileOkay()&&resumeAttempts<2&&Date.now()-requestedAt<45000&&Date.now()-resumeClickedAt>1500){
+      const wanted=Number(settings.start)>0?'oglądaj dalej':'oglądaj od początku';
+      const button=[...document.querySelectorAll('button,a,[role=button],div')].find(b=>b.innerText?.trim().toLocaleLowerCase('pl')===wanted&&b.getBoundingClientRect().width>0);
+      if(button){resumeAttempts++;resumeClickedAt=Date.now();button.click();}
+    }
     const v=video();if(!v){if(requestedStart&&!startFailed&&Date.now()-requestedAt>45000){startFailed=true;send({event:'player-error',message:'Nie uruchomiono początku audycji Polsat Box Go. Wybierz Na żywo lub spróbuj ponownie.'});}return;}
+    if(window.__tvpPolsatEnded){v.pause();return;}
     if(!profileOkay()){
       v.pause();if(Date.now()-noticeAt>10000){noticeAt=Date.now();send({event:'player-error',message:'Profil odtwarzacza nie odpowiada profilowi wybranemu we wtyczce. Zatrzymano odtwarzanie. Wybierz ponownie profil Polsat Box Go.'});}return;
     }
     if(v!==current){current=v;loaded=false;lastTracks='';lastTime=-1;lastPause=null;v.volume=desiredVolume;}
+    // The service can silently resume an old position even after a new episode opens.
+    // Touch the requested position once, only when its SDK confirms main content (never ads/live).
+    if(!requestedStart&&!vodPositionDone&&location.pathname?.startsWith('/wideo/')){
+      const state=window.__tvpPolsatSDK?.getStatus?.()?.state;
+      if((state==='PLAYING_CONTENT'||state==='PAUSED_CONTENT')&&Number.isFinite(v.duration)&&v.duration>0&&!v.seeking){
+        const target=Math.max(0,Math.min(v.duration,Number(settings.start)||0));
+        if(Math.abs(v.currentTime-target)>1)v.currentTime=target;
+        vodPositionDone=true;
+      }
+    }
     if(!startDone){
       v.muted=true;
       if(startFailed){v.pause();return;}

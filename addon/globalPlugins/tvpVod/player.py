@@ -84,7 +84,7 @@ def resolve(material, *, allow_drm=False, web=False):
         return OfficialSource(material.url,'LIVE' if material.kind=='PLAYERPL_LIVE' else 'MOVIE')
     if material.kind.startswith('POLSAT'):
         from .polsat import check_access,official_url
-        from .polsat_api import PolsatError
+        from .polsat_api import PolsatError,PolsatAccessDenied
         if not official_url(material.url):raise CatalogError('Niepoprawny adres Polsat Box Go.')
         url=material.url
         try:
@@ -93,6 +93,9 @@ def resolve(material, *, allow_drm=False, web=False):
             if material.kind=='POLSAT_LIVE' and parse_qs(urlsplit(url).query).get('tvpStartOver'):
                 from .polsat import timeline_origin
                 url+='&tvpTimelineOrigin='+str(timeline_origin(material))
+        except PolsatAccessDenied as exc:
+            from .purchase import PurchaseRequired
+            raise PurchaseRequired(str(exc)) from None
         except PolsatError as exc:raise CatalogError(str(exc)) from None
         return OfficialSource(url,'LIVE' if material.kind=='POLSAT_LIVE' else 'MOVIE')
     if material.kind in ("CANAL","CANAL_LIVE"):
@@ -111,7 +114,8 @@ def resolve(material, *, allow_drm=False, web=False):
                   videoType="LIVE" if material.kind == "LIVE" else "MOVIE")
     if payload.get("code"):
         if payload["code"] == "ITEM_NOT_PAID":
-            raise CatalogError("Materiał wymaga wykupionego dostępu do TVP VOD.")
+            from .purchase import PurchaseRequired
+            raise PurchaseRequired("Materiał wymaga wykupionego dostępu do TVP VOD.")
         raise CatalogError("TVP nie udostępniło tego materiału: " + str(payload["code"]))
     if web:
         from urllib.parse import urlsplit

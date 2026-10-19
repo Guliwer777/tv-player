@@ -135,6 +135,8 @@ class WebPlayer:
             if name=='track-list':
                 return isinstance(value,list) and len(value)<=64 and all(isinstance(t,dict) and type(t.get('id')) is int and isinstance(t.get('title'),str) and len(t['title'])<=300 for t in value)
             return False
+        if event=='content-start':
+            return isinstance(packet.get('title'),str) and 0<len(packet['title'])<=500
         if event in ('player-error','player-notice'):
             return isinstance(packet.get('message'),str) and len(packet['message'])<=1000
         return event in ('file-loaded','playback-restart') or (event=='end-file' and packet.get('reason') in ('eof','error'))

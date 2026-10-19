@@ -19,7 +19,7 @@ module=importlib.import_module(package.__name__+'.playbackDialog')
 web=importlib.import_module(package.__name__+'.webPlayer')
 app=wx.App(False)
 
-def scenario(close_early):
+def scenario(close_early,replace_media=False):
     frame=wx.Frame(None)
     gate=threading.Event();created=[];beats=[];events=[];errors=[]
     state=types.SimpleNamespace(alive=True,player=None,video=types.SimpleNamespace(GetHandle=lambda:0),resume_at=0,
@@ -36,6 +36,7 @@ def scenario(close_early):
         returned=time.monotonic()-start
         wx.CallLater(40,lambda:beats.append(time.monotonic()))
         if close_early:wx.CallLater(80,lambda:setattr(state,'alive',False))
+        if replace_media:wx.CallLater(80,lambda:setattr(state,'playback_generation',1))
         wx.CallLater(150,gate.set)
         wx.CallLater(300,app.ExitMainLoop)
         app.MainLoop()
@@ -43,11 +44,13 @@ def scenario(close_early):
     assert returned<.25,('startup blocked GUI',returned)
     assert beats and beats[0]-start<.14,('GUI did not process timer',beats)
     assert not errors,errors
-    if close_early:
+    if close_early or replace_media:
         assert created[0].closed and not events,'late player not cleaned up'
     else:
         assert state.player is created[0] and events==[{'event':'file-loaded'}],'startup events were lost'
-    print('PASS: blocked process creation leaves wx responsive; '+('late process closed' if close_early else 'early events preserved'))
+    print('PASS: blocked process creation leaves wx responsive; '+('late process closed' if close_early or replace_media else 'early events preserved'))
 
 scenario(False)
 scenario(True)
+
+scenario(False,True)

@@ -7,10 +7,10 @@ from datetime import datetime,timedelta,timezone
 from urllib.parse import quote,urlsplit,urlencode,urlunsplit
 try:
     from .catalog import CatalogError,Folder,Material,plain_text
-    from .polsat_api import Client,PolsatError,authenticated
+    from .polsat_api import Client,PolsatError,PolsatAccessDenied,authenticated
 except ImportError:
     from catalog import CatalogError,Folder,Material,plain_text
-    from polsat_api import Client,PolsatError,authenticated
+    from polsat_api import Client,PolsatError,PolsatAccessDenied,authenticated
 
 HOME='https://polsatboxgo.pl/'
 _cache={}
@@ -53,8 +53,15 @@ def material(row,live=False):
     if live:
         description+='\nDostęp do kanału jest sprawdzany przed odtworzeniem.'
         if duration>300:description+='\nZakres cofania w danych Polsatu: '+str(round(duration/3600,1))+' godz. Dostęp konkretnej audycji wymaga potwierdzenia.'
+    try:from .episodeOrder import positive,title_number
+    except ImportError:from episodeOrder import positive,title_number
+    category=row.get('category') or {}
+    number=(title_number(title) or positive(row.get('episodeNumber'))) if not live else 0
     return Material(identifier(url),title,description,url,'POLSAT_LIVE' if live else 'POLSAT',False,
-                    playback_mode='polsat:'+str(max(0,int(duration))) if live else '',provider_id=mid)
+                    playback_mode='polsat:'+str(max(0,int(duration))) if live else '',provider_id=mid,episode_number=number,
+                    season_id=str(category.get('id') or '') if number else '',
+                    series_id=str(category.get('keyCategoryId') or '') if number else '',
+                    season_number=positive(category.get('seasonNumber')) if number else 0)
 
 
 def accessible_channels(rows,client):
@@ -233,6 +240,8 @@ def parse_items(rows):
 def check_access(item):
     client=Client();client.ensure_profile()
     result=client.call('drm','checkProductAccess',{'product':{'id':media_id(item),'subType':'tv' if item.kind=='POLSAT_LIVE' else 'vod','type':'media'}})
+    if isinstance(result,dict) and result.get('statusDescription')=='no access':
+        raise PolsatAccessDenied('Ten materiał nie jest dostępny w wybranym profilu i pakiecie Polsat Box Go.')
     # Never equate a missing/unknown status with permission.
     if not isinstance(result,dict) or result.get('statusDescription') not in ('has access','access granted','access'):
         raise PolsatError('Nie potwierdzono dostępu do tego materiału w wybranym profilu i pakiecie Polsat Box Go.')
@@ -273,3 +282,41 @@ def programmes(item,stop):
             if end<=now and not replay:continue
             rows[row['polsat_epg_id']]=dict(row,replay_available=replay)
     return sorted(rows.values(),key=lambda row:row['start'])
+
+
+def following_episode(current,folder):
+    from .episodeOrder import episode_number,next_numbered,positive
+    from dataclasses import replace
+    if not episode_number(current):return None
+    season_id=current.season_id
+    if not season_id and folder and folder.kind=='POLSAT' and folder.resource.startswith('category:'):season_id=folder.resource.split(':',1)[1]
+    if not season_id.isdigit():return None
+    folder=Folder(identifier('category:'+season_id),'Odcinki','POLSAT','category:'+season_id)
+    def all_episodes(folder):
+        items=[];offset=0
+        while offset<10000:
+            rows,more=browse(folder,offset);items.extend(row for row in rows if isinstance(row,Material))
+            if not more:return items
+            offset+=50
+        raise CatalogError('Lista odcinków jest niepełna. Nie wybrano kolejnego odcinka.')
+    items=all_episodes(folder)
+    found=next((item for item in items if item.provider_id==current.provider_id),None)
+    if found:current=found
+    target=next_numbered(items,current)
+    if target:return target,folder,items
+    if not current.series_id.isdigit() or not current.season_number:return None
+    client=Client();seasons=client.call('navigation','getSubCategories',{'catid':int(current.series_id)})
+    def season_number(row):
+        match=re.fullmatch(r'Sezon\s+(\d+)',str(row.get('name','')),re.I)
+        return positive(row.get('seasonNumber')) or (int(match[1]) if match else 0)
+    for row in sorted((row for row in seasons if season_number(row)>current.season_number),key=season_number):
+        next_folder=Folder(identifier('category:'+str(row['id'])),row.get('name','Odcinki'),'POLSAT','category:'+str(row['id']))
+        items=all_episodes(next_folder)
+        if not items:continue
+        numbered=[item for item in items if episode_number(item)>0 and item.provider_id!=current.provider_id]
+        if not numbered:continue
+        minimum=min(episode_number(item) for item in numbered)
+        choices=[item for item in numbered if episode_number(item)==minimum and 'pilot' not in item.title.casefold()]
+        if len({item.id for item in choices})!=1:raise CatalogError('Nie ustalono jednoznacznie pierwszego odcinka kolejnego sezonu Polsatu.')
+        return choices[0],next_folder,items
+    return None
