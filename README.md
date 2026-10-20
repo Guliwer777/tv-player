@@ -6,6 +6,14 @@ Dostępny z klawiatury interfejs do TVP VOD, TVP Sport, CANAL+, Polsat Box Go
 oraz eksperymentalnie Playera. Projekt niezależny, nie jest oficjalną aplikacją
 ani produktem tych dostawców.
 
+## Ważne: korzystanie na własną odpowiedzialność
+
+TV Player jest niezależnym, nieoficjalnym dodatkiem i nie jest zatwierdzony ani wspierany przez dostawców platform. Każdy użytkownik korzysta z dodatku na własną odpowiedzialność i powinien przestrzegać regulaminu danej usługi oraz korzystać wyłącznie z treści, do których ma uprawnienia.
+
+Połączenie konta kodem i poprawne odtwarzanie nie oznaczają, że dostawca akceptuje korzystanie z tego dodatku. Nie można wykluczyć ograniczenia dostępu, wylogowania urządzenia, zawieszenia lub zablokowania konta, jeżeli dostawca uzna sposób korzystania z usługi za niezgodny z jej zasadami. Nie jest to stwierdzenie, że dostawcy blokują konta za samo używanie TV Player.
+
+Dodatek jest udostępniany bez gwarancji nieprzerwanego działania, zgodności z usługami dostawców ani braku ograniczeń konta. W zakresie dopuszczalnym przez obowiązujące prawo autor nie ponosi odpowiedzialności za szkody lub inne skutki wynikające z używania dodatku, w tym ograniczenie dostępu do usługi lub blokadę konta. Niniejsza informacja nie wyłącza ani nie ogranicza odpowiedzialności, której zgodnie z prawem nie można wyłączyć lub ograniczyć.
+
 ## Pobieranie i instalacja
 
 Pobierz plik `.nvda-addon` z [wydań GitHub](https://github.com/Guliwer777/tv-player/releases).
