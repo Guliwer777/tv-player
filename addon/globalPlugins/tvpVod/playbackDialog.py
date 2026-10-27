@@ -85,6 +85,7 @@ class PlaybackDialog(wx.Dialog):
         self.loaded = False
         self.actual_media_title = ""
         self.image_visible=False
+        self.fullscreen_state=False
         self.pending_bookmark = False
         self.paused_state = None
         self.seek_step = self.settings["seekStep"]
@@ -105,10 +106,15 @@ class PlaybackDialog(wx.Dialog):
         self.pause = wx.Button(self, label="Pauza / wznów")
         layout.Add(self.pause, 0, wx.ALL, 5)
         self.pause.Bind(wx.EVT_BUTTON, lambda event: self.send("cycle", "pause"))
-        if material.kind in ('CANAL','CANAL_LIVE','POLSAT','POLSAT_LIVE','PLAYERPL','PLAYERPL_LIVE'):
-            self.image_button=wx.Button(self,label='Pokaż obraz')
-            self.image_button.Bind(wx.EVT_BUTTON,self.toggle_image)
-            layout.Add(self.image_button,0,wx.ALL,5)
+        self.video.Hide()
+        self.image_button=wx.Button(self,label='Pokaż obraz')
+        self.image_button.Bind(wx.EVT_BUTTON,self.toggle_image)
+        layout.Add(self.image_button,0,wx.ALL,5)
+        self.fullscreen_button=wx.Button(self,label='Pełny ekran obrazu (F11)')
+        self.fullscreen_button.Bind(wx.EVT_BUTTON,lambda event:self.execute_command('fullscreen'))
+        layout.Add(self.fullscreen_button,0,wx.ALL,5)
+        cast=wx.Button(self,label='Wyślij materiał do DLNA…')
+        cast.Bind(wx.EVT_BUTTON,self.open_dlna);layout.Add(cast,0,wx.ALL,5)
         layout.Add(wx.StaticText(self, label="Czas odtwarzania i przewijanie:"), 0, wx.LEFT, 5)
         self.timeline = NamedSlider(self, value=0, minValue=0, maxValue=1,
                                     name="Czas odtwarzania i przewijanie",
@@ -163,9 +169,20 @@ class PlaybackDialog(wx.Dialog):
         self.send('window-show' if self.image_visible else 'window-hide')
         self.image_button.SetLabel('Ukryj obraz' if self.image_visible else 'Pokaż obraz')
 
+    def open_dlna(self,event=None):
+        from .dlnaDialog import DlnaDialog
+        if self.material.kind in ('CANAL','CANAL_LIVE','POLSAT','POLSAT_LIVE','PLAYERPL','PLAYERPL_LIVE'):
+            from .dlna import DlnaError,media_candidates
+            try:media_candidates(self.material)
+            except DlnaError as error:ui.message(str(error))
+            return
+        if getattr(self,'dlna_dialog',None) and self.dlna_dialog.alive:
+            self.dlna_dialog.Show();self.dlna_dialog.Raise();return
+        self.dlna_dialog=DlnaDialog(self,self.material);self.dlna_dialog.Show()
+
     def on_key(self, event):
         key = event.GetKeyCode()
-        names = {wx.WXK_SPACE: "space", wx.WXK_F1: "f1", wx.WXK_LEFT: "leftarrow", wx.WXK_RIGHT: "rightarrow",
+        names = {wx.WXK_SPACE: "space", wx.WXK_F1: "f1", wx.WXK_F11:'f11', wx.WXK_LEFT: "leftarrow", wx.WXK_RIGHT: "rightarrow",
                  wx.WXK_UP: "uparrow", wx.WXK_DOWN: "downarrow"}
         name = names.get(key, chr(key).lower() if 0 <= key < 128 else "")
         parts = {name}
@@ -201,6 +218,13 @@ class PlaybackDialog(wx.Dialog):
         elif action=='output':
             from .audioOutput import choose
             choose(self,self.store,self)
+        elif action=='fullscreen':
+            if not self.player:ui.message('Najpierw uruchom materiał.');return
+            try:
+                import ctypes
+                ctypes.windll.user32.AllowSetForegroundWindow(self.player.process.pid)
+            except (OSError,AttributeError):pass
+            self.send('window-fullscreen')
         elif action == "pause":
             self.send("cycle", "pause")
         elif action == "time":
@@ -267,7 +291,7 @@ class PlaybackDialog(wx.Dialog):
         if not self.loaded or not self.player:
             ui.message("Poczekaj na rozpoczęcie odtwarzania.")
             return
-        if self.material.kind == "LIVE":
+        if self.material.kind in ("LIVE"):
             ui.message("Zakładki są dostępne dla materiałów na żądanie, nie dla transmisji na żywo.")
             return
         if not self.pending_bookmark:
@@ -299,6 +323,7 @@ class PlaybackDialog(wx.Dialog):
     def load_next(self, material, display_title=None):
         """Replace the media while retaining this window, keyboard focus and seek step."""
         self.playback_generation += 1
+        if getattr(self,'dlna_dialog',None) and self.dlna_dialog.alive:self.dlna_dialog.Close()
         if self.player:self.player.close()
         self.player=None
         self.material=material
@@ -317,6 +342,8 @@ class PlaybackDialog(wx.Dialog):
         self.audio_ids=[];self.audio_labels=[]
         self.announce_after_seek=False
         self.image_visible=False
+        self.fullscreen_state=False
+        if hasattr(self,'fullscreen_button'):self.fullscreen_button.SetLabel('Pełny ekran obrazu (F11)')
         if hasattr(self,'image_button'):self.image_button.SetLabel('Pokaż obraz')
         self.pause.SetLabel('Pauza')
         self.audio.SetLabel('Ścieżka audio / audiodeskrypcja')
@@ -425,6 +452,8 @@ class PlaybackDialog(wx.Dialog):
         return spoken_time(self.position,self.duration)
 
     def report_error(self, message):
+        from .diagnostics import record
+        record('Odtwarzacz '+self.material.kind,message)
         if self.alive:
             self.status.SetLabel(message)
             ui.message(message)
@@ -433,6 +462,16 @@ class PlaybackDialog(wx.Dialog):
         if not self.alive:
             return
         name = event.get("event")
+        if name=='window-state':
+            self.image_visible=event['visible']
+            self.image_button.SetLabel('Ukryj obraz' if self.image_visible else 'Pokaż obraz')
+            self.fullscreen_button.SetLabel('Wyłącz pełny ekran (F11)' if event['fullscreen'] else 'Pełny ekran obrazu (F11)')
+            if event['fullscreen']!=getattr(self,'fullscreen_state',False):ui.message('Pełny ekran włączony.' if event['fullscreen'] else 'Pełny ekran wyłączony.')
+            self.fullscreen_state=event['fullscreen']
+            return
+        if name=='player-diagnostic':
+            from .diagnostics import record
+            record('Odtwarzacz '+self.material.kind,event.get('message',''));return
         if name == 'content-start' and self.material.kind=='POLSAT':
             title=event['title']
             expected,actual=episode_number(self.material),title_number(title)

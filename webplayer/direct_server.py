@@ -152,7 +152,8 @@ class DirectServer:
                 # closing a Windows socket with unread POST data can reset it
                 # before the browser receives the status code.
                 body=self.rfile.read(length) if self.command=='POST' else None
-                if parts.scheme!='https' or parts.hostname not in owner.allowed_hosts or parts.username or parts.port not in (None,443):
+                permitted=parts.scheme=='https' and parts.hostname in owner.allowed_hosts and not parts.username and parts.port in (None,443)
+                if not permitted:
                     self.send_error(403);return
                 if self.command=='POST' and remote not in owner.config['servers'].values():
                     self.send_error(403);return
@@ -160,9 +161,10 @@ class DirectServer:
                 if body is not None:headers['Content-Type']=self.headers.get('Content-Type','application/octet-stream')
                 if self.headers.get('Range'):headers['Range']=self.headers['Range']
                 try:
-                    response=remote_open(Request(remote,data=body,headers=headers,method=self.command),owner.allowed_hosts)
+                    request=Request(remote,data=body,headers=headers,method=self.command)
+                    response=remote_open(request,owner.allowed_hosts)
                     trace(stage='headers',elapsed=time.monotonic()-started,status=response.status,length=response.headers.get('Content-Length'),**details)
-                    if urlsplit(response.url).hostname not in owner.allowed_hosts:
+                    if not (urlsplit(response.url).hostname in owner.allowed_hosts):
                         response.close();self.send_error(403);return
                     with response:
                         data=response.read(32000001)

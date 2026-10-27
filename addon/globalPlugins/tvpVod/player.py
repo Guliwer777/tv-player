@@ -75,9 +75,11 @@ class NativePipe:
 class OfficialSource:
     url: str
     video_type: str = "MOVIE"
+    stream_headers: str = ""
 
 
 def resolve(material, *, allow_drm=False, web=False):
+    if material.kind=='IPTV_LIVE':raise CatalogError('Obsługa IPTV została usunięta. Usuń tę pozycję z ulubionych lub zakładek.')
     if material.kind in ('PLAYERPL','PLAYERPL_LIVE'):
         from .playerpl import official_url
         if not official_url(material.url):raise CatalogError('Niepoprawny adres materiału Playera.')

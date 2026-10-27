@@ -3,13 +3,16 @@
   const video=document.getElementById('video'),status=document.getElementById('status');
   const send=message=>window.tvp_bridge.postMessage(JSON.stringify(message));
   let player,config,loaded=false,audios=[],ended=false,pendingAudioId=null,timeBase=0;
+  const pendingCommands=[];
+  const diagnostic=message=>send({event:'player-diagnostic',message});
   const safe=n=>Number.isFinite(n)?n:0;
   function failure(error) {
     const code=error?.code || error?.name || 'nieznany';
     status.textContent='Błąd odtwarzacza: '+code;
     const detail=String(error?.message||'').replace(/https?:\/\/\S+/g,'[adres]').slice(0,250);
-    const type=code===1003?error?.data?.[1]:error?.data?.[2];
-    send({event:error?.severity===1?'player-notice':'player-error',message:'Odtwarzacz TV Player: '+code+(Number.isInteger(type)?' (żądanie '+type+')':'')+(detail?' — '+detail:'')});
+    const type=code===1001?error?.data?.[4]:error?.data?.[1];
+    const http=code===1001 && Number.isInteger(error?.data?.[1])?' HTTP '+error.data[1]:'';
+    send({event:error?.severity===1?'player-notice':'player-error',message:'Odtwarzacz TV Player: '+code+http+(Number.isInteger(type)?' (żądanie '+type+')':'')+(detail?' — '+detail:'')});
   }
   function audioList() {
     const raw=typeof player.getAudioTracks==='function'?player.getAudioTracks():[];
@@ -35,7 +38,11 @@
   window.__tvpCommand=async packet=>{
     const [action,...args]=packet.command||[];
     try {
-      if(!loaded)throw new Error('loading');
+      if(!loaded) {
+        if(packet.request_id)send({request_id:packet.request_id,error:'unavailable',data:null});
+        else if(['seek','cycle','set_property'].includes(action) && pendingCommands.length<32)pendingCommands.push(packet);
+        return;
+      }
       let data=null;
       if(action==='get_property' && args[0]==='aid' && pendingAudioId!==null) {
         const wanted=pendingAudioId,deadline=Date.now()+4000;
@@ -78,16 +85,19 @@
     if(action){event.preventDefault();event.stopImmediatePropagation();send({event:'addon-command',action});}
   },true);
   async function init(){
+    diagnostic('Środowisko odtwarzacza: '+String(globalThis.navigator?.userAgent||'nieznane')+', bezpieczny kontekst: '+String(globalThis.isSecureContext));
+    diagnostic('Ładowanie: konfiguracja materiału.');
     config=await (await fetch('config.json')).json();
     if(typeof shaka==='undefined')throw new Error('Nie załadowano biblioteki Shaka Player.');
     shaka.polyfill.installAll();
     if(!shaka.Player.isBrowserSupported())throw new Error('unsupported-browser');
+    diagnostic('Ładowanie: inicjalizacja odtwarzacza.');
     player=new shaka.Player();await player.attach(video);
     player.addEventListener('error',event=>failure(event.detail));
     if(config.relay) {
       const relay=new URL(config.relay,location.href).href;
       let networkSequence=0;
-      shaka.net.NetworkingEngine.registerScheme('https',(uri,request,type,progress,headersReceived,pluginConfig)=>{
+      const proxyScheme=(uri,request,type,progress,headersReceived,pluginConfig)=>{
         const sequence=++networkSequence;
         const diagnostic=stage=>send({event:'direct-network',stage,sequence,type});
         diagnostic('fetch');
@@ -98,11 +108,13 @@
           response.uri=uri;response.originalUri=uri;
           return response;
         });
-      },shaka.net.NetworkingEngine.PluginPriority.APPLICATION,true);
+      };
+      shaka.net.NetworkingEngine.registerScheme('https',proxyScheme,shaka.net.NetworkingEngine.PluginPriority.APPLICATION,true);
     }
     const settings={drm:{servers:config.servers,preferredKeySystems:['com.widevine.alpha','com.microsoft.playready']}};
     if(Number(config.quality)>0)settings.abr={restrictions:{maxBandwidth:Number(config.quality)},defaultBandwidthEstimate:Number(config.quality),useNetworkInformation:false};
     player.configure(settings);
+    diagnostic('Ładowanie: strumień i ewentualna licencja DRM.');
     await player.load(config.manifest,config.isLive?undefined:Number(config.start)||0);
     if(config.isLive)timeBase=player.seekRange().start;
     if(config.quality==='min' || config.quality==='max') {
@@ -115,11 +127,13 @@
     }
     video.volume=Math.max(0,Math.min(1,Number(config.volume)/100));
     loaded=true;status.textContent='';
+    diagnostic('Ładowanie zakończone — materiał gotowy.');
     send({event:'file-loaded'});
     if(!config.pause)try{await video.play();}catch(error){
       if(error?.name==='NotAllowedError')send({event:'player-notice',message:'Materiał gotowy. Naciśnij Ctrl+Spacja, aby rozpocząć.'});
       else if(error?.name!=='AbortError')failure(error);
     }
+    for(const packet of pendingCommands.splice(0))await window.__tvpCommand(packet);
     send({event:'property-change',name:'track-list',data:audioList()});
   }
   video.addEventListener('seeked',()=>send({event:'playback-restart'}));

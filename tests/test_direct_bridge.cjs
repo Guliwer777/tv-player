@@ -25,7 +25,11 @@ const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/st
    return {chain:callback=>({promise:Promise.resolve(callback({uri:url,data:new Uint8Array([1,2,3]).buffer}))})};
   }}},polyfill:{installAll(){}}}};
  vm.runInNewContext(fs.readFileSync(require('node:path').join(__dirname,'../webplayer/direct.js'),'utf8'),context);
+ await context.window.__tvpCommand({command:['set_property','volume',35]});
+ await context.window.__tvpCommand({command:['get_property','time-pos'],request_id:999});
+ assert.ok(!events.some(e=>e.event==='player-error' && /loading/.test(e.message)));
  await new Promise(setImmediate);tick();
+ assert.equal(video.volume,.35);
  assert.equal(video.currentTime,125.375);assert.equal(video.paused,false);
  assert.equal(configuration.abr.restrictions.maxBandwidth,800000);
  assert.ok(events.some(e=>e.event==='file-loaded'));

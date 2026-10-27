@@ -9,7 +9,7 @@ def normalize(identifier):
 
 
 def action_from_event(event, wx):
-    names = {wx.WXK_SPACE: "space", wx.WXK_F1: "f1", wx.WXK_LEFT: "leftarrow",
+    names = {wx.WXK_SPACE: "space", wx.WXK_F1: "f1", wx.WXK_F11:'f11', wx.WXK_LEFT: "leftarrow",
              wx.WXK_RIGHT: "rightarrow", wx.WXK_UP: "uparrow", wx.WXK_DOWN: "downarrow"}
     code = event.GetKeyCode()
     name = names.get(code, chr(code).lower() if 0 <= code < 128 else "")
@@ -22,6 +22,7 @@ def action_from_event(event, wx):
 
 ACTIVATION = frozenset(("nvda", "shift", "v"))
 ACTIONS = {
+    frozenset(('f11',)): 'fullscreen',
     frozenset(("control", "p")): "focus-player",
     frozenset(("control", "d")): "output",
     frozenset(("control", "u")): "favorite",

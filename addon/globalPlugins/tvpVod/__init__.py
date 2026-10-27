@@ -35,6 +35,8 @@ class CatalogDialog(wx.Dialog):
         self.playback = None
         self.heading = "TV Player"
         self.store = Store(Path(globalVars.appArgs.configPath) / "tvpVod.json")
+        from .updateDialog import UpdateChecker
+        self.update_checker=UpdateChecker()
         layout = wx.BoxSizer(wx.VERTICAL)
         self.location = wx.StaticText(self, label="TV Player")
         layout.Add(self.location, 0, wx.ALL, 8)
@@ -75,6 +77,8 @@ class CatalogDialog(wx.Dialog):
             MenuEntry("Zakładki", "bookmarks"), MenuEntry("Wznów ostatni materiał", "resume"),
             MenuEntry("Przypomnienia", "reminders"), MenuEntry("Zaplanowane seanse", "watch-plans"),
             MenuEntry("Ustawienia", "settings"), MenuEntry("O dodatku", "about"),
+            MenuEntry('Zgłoś problem','support','Opis problemu, podgląd raportu błędów i przygotowanie e-maila do autora.'),
+            MenuEntry('Sprawdź aktualizacje','updates','Sprawdź nowe wydania TV Player na GitHubie.'),
             MenuEntry("Zatrzymaj i zakończ", "quit"),
         ]
         self.home_items[:5]=sorted(self.home_items[:5],key=lambda item:item.label.casefold())
@@ -211,8 +215,12 @@ class CatalogDialog(wx.Dialog):
             try:
                 (results, more), message = task(), ""
             except CatalogError as error:
+                from .diagnostics import record
+                record('Katalog',error)
                 results, more, message = [], False, str(error)
-            except Exception:
+            except Exception as error:
+                from .diagnostics import record
+                record('Katalog — '+type(error).__name__,error)
                 results, more, message = [], False, "Nieznany format danych TVP VOD."
             wx.CallAfter(self.complete, generation, results, message, more)
         threading.Thread(target=worker, daemon=True).start()
@@ -226,7 +234,13 @@ class CatalogDialog(wx.Dialog):
             self.restore_bookmark(item.id)
             return
         if isinstance(item, MenuEntry):
-            if item.action in self.provider_items:
+            if item.action=='support':
+                from .supportDialog import SupportDialog
+                playback=self.playback
+                context=playback.material.kind if playback and playback.alive else self.current_folder.kind if self.current_folder else 'Menu główne'
+                with SupportDialog(self,globalVars.appArgs.configPath,context) as dialog:dialog.ShowModal()
+            elif item.action=='updates':self.check_updates(manual=True)
+            elif item.action in self.provider_items:
                 self.remember()
                 self.generation += 1
                 self.current_folder, self.offset, self.heading = None, 0, item.label
@@ -905,7 +919,11 @@ class CatalogDialog(wx.Dialog):
             self.playback.hide_to_background()
         ui.message("TV Player działa w tle.")
 
+    def check_updates(self,manual=False):
+        self.update_checker.check(self,globalVars.appArgs.configPath,manual)
+
     def shutdown(self):
+        self.update_checker.alive=False
         if getattr(self,'access_timer',None):self.access_timer.Stop()
         if getattr(self,'access_stop',None):self.access_stop.set()
         self.alive = False
@@ -1039,6 +1057,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 
     def show_dialog(self, event=None):
         if self.dialog and self.dialog.alive:
+            self.dialog.check_updates()
             if self.dialog.playback and self.dialog.playback.alive:
                 self.dialog.playback.SetTitle("TV Player — " + self.dialog.playback.display_title)
                 self.dialog.playback.Show()
@@ -1048,6 +1067,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
             else:
                 self.dialog.SetTitle("TV Player")
                 self.dialog.Show()
+                self.dialog.check_updates()
                 self.dialog.Raise()
                 wx.CallAfter(ui.message,"TV Player")
             return

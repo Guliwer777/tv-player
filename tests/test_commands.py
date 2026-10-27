@@ -21,6 +21,8 @@ def method(filename, clsname, name, namespace):
 
 
 class CommandTests(unittest.TestCase):
+    def test_f11_is_fullscreen(self):
+        self.assertEqual(commands.ACTIONS[frozenset(('f11',))],'fullscreen')
     def test_control_p_focuses_existing_player_without_playback_command(self):
         self.assertEqual(commands.ACTIONS[frozenset(('control','p'))],'focus-player')
         calls=[]
@@ -243,7 +245,7 @@ class AudioTests(unittest.TestCase):
 
 class BackgroundTests(unittest.TestCase):
     def test_arrows_only_operate_timeline_and_volume_not_button_navigation(self):
-        wx = SimpleNamespace(WXK_SPACE=32, WXK_F1=340, WXK_F6=345, WXK_LEFT=314, WXK_RIGHT=316,
+        wx = SimpleNamespace(WXK_SPACE=32, WXK_F1=340, WXK_F11=350, WXK_F6=345, WXK_LEFT=314, WXK_RIGHT=316,
                              WXK_UP=315, WXK_DOWN=317, WXK_ESCAPE=27, WXK_BACK=8)
         handler = method("playbackDialog.py", "PlaybackDialog", "on_key", {"wx": wx, "ACTIONS": commands.ACTIONS})
         calls = []
@@ -263,7 +265,7 @@ class BackgroundTests(unittest.TestCase):
         self.assertEqual(calls, ["forward", "native"])
 
     def test_catalog_routes_playback_shortcuts_without_opening_player(self):
-        wx = SimpleNamespace(WXK_SPACE=32, WXK_F1=340, WXK_F10=349, WXK_LEFT=314, WXK_RIGHT=316,
+        wx = SimpleNamespace(WXK_SPACE=32, WXK_F1=340, WXK_F11=350, WXK_F10=349, WXK_LEFT=314, WXK_RIGHT=316,
                              WXK_UP=315, WXK_DOWN=317)
         namespace = {"wx": wx, "action_from_event": commands.action_from_event, "planning_mode": lambda event: None}
         handler = method("__init__.py", "CatalogDialog", "on_key", namespace)
@@ -324,7 +326,7 @@ class BackgroundTests(unittest.TestCase):
 
 class VolumeDirectionTests(unittest.TestCase):
  def test_plain_up_increases_and_down_decreases_only_on_volume(self):
-  wx=SimpleNamespace(WXK_SPACE=32,WXK_F1=340,WXK_LEFT=314,WXK_RIGHT=316,WXK_UP=315,WXK_DOWN=317,WXK_ESCAPE=27,WXK_BACK=8)
+  wx=SimpleNamespace(WXK_SPACE=32,WXK_F1=340, WXK_F11=350,WXK_LEFT=314,WXK_RIGHT=316,WXK_UP=315,WXK_DOWN=317,WXK_ESCAPE=27,WXK_BACK=8)
   handler=method('playbackDialog.py','PlaybackDialog','on_key',{'wx':wx,'ACTIONS':commands.ACTIONS})
   volume=object();calls=[]
   dialog=SimpleNamespace(volume=volume,timeline=object(),FindFocus=lambda:volume,execute_command=calls.append)

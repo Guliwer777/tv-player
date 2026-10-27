@@ -14,6 +14,7 @@ from urllib.parse import urlsplit,parse_qs
 
 import wx
 import wx.html2 as html2
+from window_mode import WindowMode,KEY_SCRIPT
 
 
 def official_url(url, allow_sport=False):
@@ -35,16 +36,17 @@ def emit(value):
     print(json.dumps(value, ensure_ascii=True), flush=True)
 
 
-class Host(wx.Frame):
+class Host(WindowMode,wx.Frame):
     def __init__(self, options):
         self.playerpl=getattr(options,'playerpl',False)
-        if options.canal or options.polsat or self.playerpl:options.parent=0  # Provider browsers stay separate from NVDA's UI thread.
+        options.parent=0  # All browser images stay separate, so fullscreen never resizes NVDA.
         super().__init__(None, title='TV Player — Polsat Box Go' if options.polsat else 'TV Player — CANAL+' if options.canal else 'TV Player — odtwarzacz',
                          style=wx.NO_BORDER if options.parent else wx.DEFAULT_FRAME_STYLE,
                          size=(900,650))
         self.canal=options.canal
         self.polsat=options.polsat
         self.closed = False
+        self.setup_window_mode(emit)
         self.embedded = False
         self.direct = None
         if options.polsat or self.playerpl:
@@ -62,6 +64,7 @@ class Host(wx.Frame):
         if not self.view:
             raise RuntimeError('Nie udało się utworzyć okna WebView2.')
         self.view.AddScriptMessageHandler('tvp_bridge')
+        self.view.AddUserScript(KEY_SCRIPT)
         if self.playerpl or self.polsat:
             self.view.AddUserScript((Path(__file__).parent/'audio_hooks.js').read_text(encoding='utf-8'))
         if self.canal and options.canal_probe:
@@ -121,7 +124,6 @@ class Host(wx.Frame):
         self.Bind(wx.EVT_TIMER, self.resize, self.timer)
         self.timer.Start(200)
         if options.parent:self.ShowWithoutActivating()
-        elif not (self.canal or self.polsat or self.playerpl):self.Show()
         self.Layout()
         self.view.LoadURL(self.direct.url if self.direct else options.url)
         threading.Thread(target=self.read,daemon=True).start()
@@ -214,6 +216,10 @@ class Host(wx.Frame):
             return
         try:
             packet=json.loads(event.GetString())
+            if isinstance(packet,dict) and packet.get('event')=='window-command' and packet.get('action')=='fullscreen-toggle':
+                self.window_command('window-fullscreen');return
+            if isinstance(packet,dict) and packet.get('event')=='addon-command' and packet.get('action')=='catalog-home' and self.IsFullScreen():
+                self.ShowFullScreen(False);self.window_state();return
             if self.direct and packet.get('event')=='direct-network':
                 from direct_server import trace
                 trace(client=packet)
@@ -237,13 +243,8 @@ class Host(wx.Frame):
             return
         if packet.get('command')==['quit']:
             self.Close()
-        elif (self.canal or self.polsat or self.playerpl) and packet.get('command')==['window-hide']:
-            self.Hide()
-        elif (self.canal or self.polsat or self.playerpl) and packet.get('command')==['window-show']:
-            self.Iconize(False);self.Show();self.Raise();self.view.SetFocus()
-            try:
-                ctypes.windll.user32.SetForegroundWindow(self.GetHandle())
-            except (OSError,AttributeError):pass
+        elif packet.get('command') in (['window-hide'],['window-show'],['window-fullscreen']):
+            self.window_command(packet['command'][0])
         elif packet.get('command')==['focus']:
             self.view.SetFocus()
         elif self.trusted_page():
@@ -270,6 +271,13 @@ class Host(wx.Frame):
 
 
 def main():
+    if sys.argv[1:]==['--check-components']:
+        import ssl
+        context=ssl.create_default_context()
+        if context.verify_mode!=ssl.CERT_REQUIRED:raise RuntimeError('Nieprawidłowe sprawdzanie certyfikatów TLS.')
+        for name in ('bridge.js','canal_bridge.js','polsat_bridge.js','playerpl_bridge.js','audio_hooks.js','index.html','direct.js','bootstrap.js','vendor/shaka-player.compiled.js'):
+            if not (Path(__file__).parent/name).is_file():raise RuntimeError('Brak składnika odtwarzacza: '+name)
+        emit({'event':'component-check','tls':True,'resources':True});return
     parser=argparse.ArgumentParser()
     parser.add_argument('--parent',type=int,default=0)
     parser.add_argument('--url',required=True)
@@ -318,5 +326,6 @@ if __name__=='__main__':
     try:
         main()
     except Exception as error:
-        emit({'event':'player-error','message':'Nie udało się uruchomić WebView2: '+str(error)})
+        from startup_errors import summary
+        emit({'event':'player-error','message':summary(error)})
         sys.exit(1)

@@ -53,6 +53,7 @@ def categories():
 
 
 def browse(folder, offset=0):
+    if folder.kind=='IPTV':raise CatalogError('Obsługa IPTV została usunięta. Usuń tę pozycję z ulubionych.')
     if folder.kind=='TVP_LIVE':
         from .channelGroups import grouped
         rows=[];page=0

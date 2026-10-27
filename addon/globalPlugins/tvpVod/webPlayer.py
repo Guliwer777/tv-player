@@ -121,6 +121,7 @@ class WebPlayer:
             value=packet.get('data')
             return packet.get('error')!='success' or (isinstance(value,(int,float)) and math.isfinite(value) and value>=0)
         event=packet.get('event')
+        if event=='window-state':return type(packet.get('visible')) is bool and type(packet.get('fullscreen')) is bool
         if event=='replay-probe':
             return type(packet.get('target')) in (int,float) and math.isfinite(packet['target']) and packet['target']>0 and type(packet.get('available')) is bool
         if event=='addon-command':
@@ -137,7 +138,7 @@ class WebPlayer:
             return False
         if event=='content-start':
             return isinstance(packet.get('title'),str) and 0<len(packet['title'])<=500
-        if event in ('player-error','player-notice'):
+        if event in ('player-error','player-notice','player-diagnostic'):
             return isinstance(packet.get('message'),str) and len(packet['message'])<=1000
         return event in ('file-loaded','playback-restart') or (event=='end-file' and packet.get('reason') in ('eof','error'))
 

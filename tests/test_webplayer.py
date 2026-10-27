@@ -56,6 +56,15 @@ class DrmRoutingTests(unittest.TestCase):
 
 
 class WebsiteMessageTests(unittest.TestCase):
+    def test_window_state_accepts_only_booleans(self):
+        player=web.WebPlayer.__new__(web.WebPlayer)
+        self.assertTrue(player.valid_event({'event':'window-state','visible':True,'fullscreen':False}))
+        self.assertFalse(player.valid_event({'event':'window-state','visible':'true','fullscreen':True}))
+    def test_diagnostic_events_are_bounded_text(self):
+        player=web.WebPlayer.__new__(web.WebPlayer)
+        self.assertTrue(player.valid_event({'event':'player-diagnostic','message':'Ładowanie: strumień.'}))
+        self.assertFalse(player.valid_event({'event':'player-diagnostic','message':{'token':'secret'}}))
+        self.assertFalse(player.valid_event({'event':'player-diagnostic','message':'x'*1001}))
     def test_specific_runtime_failure_is_not_overwritten_on_process_exit(self):
         events=[]
         player=web.WebPlayer.__new__(web.WebPlayer)
