@@ -35,6 +35,25 @@ class MediaTests(unittest.TestCase):
   selected=d.choose_media(choices,['http-get:*:application/x-mpegurl:*']);self.assertEqual(selected['label'],'HLS')
   with self.assertRaises(d.DlnaError):d.choose_media(choices,['http-get:*:video/mp4:*'])
 
+class DiagnosticTests(unittest.TestCase):
+ def test_mismatch_records_formats_without_private_data(self):
+  receiver=d.Renderer('Private living room','192.168.1.5','http://192.168.1.5/av',d.AV,'http://192.168.1.5/cm','urn:schemas-upnp-org:service:ConnectionManager:1','Test manufacturer','Test model')
+  material=catalog.Material(123,'Private title','','https://vod.tvp.pl/x', 'EPISODE',False)
+  events=[]
+  choices=[{'url':'https://cdn.tvp.pl/x?token=SECRET','label':'HLS','mime':'application/vnd.apple.mpegurl'}]
+  with patch.object(d,'media_candidates',return_value=choices),patch.object(d.Renderer,'protocols',return_value=['http-get:*:video/mp4:secret-profile']):
+   with self.assertRaises(d.DlnaError):d.prepare_media(receiver,material,lambda area,message:events.append(message))
+  text='\n'.join(events)
+  for expected in ('Test model','Test manufacturer','video/mp4','application/vnd.apple.mpegurl','NIE zostały wysłane'):self.assertIn(expected,text)
+  for private in ('SECRET','secret-profile','192.168.1.5','Private','https://'):self.assertNotIn(private,text)
+ def test_protocol_failure_logged_and_selection_preserved(self):
+  receiver=d.Renderer('TV','192.168.1.5','http://192.168.1.5/av',d.AV)
+  material=catalog.Material(123,'Film','','https://vod.tvp.pl/x','EPISODE',False)
+  choice={'url':'https://cdn.tvp.pl/x','label':'MP4','mime':'video/mp4'};events=[]
+  with patch.object(d,'media_candidates',return_value=[choice]),patch.object(d.Renderer,'protocols',side_effect=d.DlnaError('test error')):
+   self.assertEqual(d.prepare_media(receiver,material,lambda area,message:events.append(message)),choice)
+  self.assertTrue(any('test error' in x for x in events))
+
 class SoapIntegrationTests(unittest.TestCase):
  def test_setup_play_pause_stop_against_mock_receiver(self):
   calls=[]

@@ -61,6 +61,8 @@ class Renderer:
     service:str
     connection:str=''
     connection_service:str=''
+    manufacturer:str=''
+    model:str=''
 
     def call(self,action,**fields):return soap(self.control,self.service,action,fields)
     def protocols(self):
@@ -109,7 +111,9 @@ def describe(location,sender,timeout=3):
         if 'AVTransport' in services:
             service,control=services['AVTransport'];connection=services.get('ConnectionManager',('',''))
             name=device.findtext('d:friendlyName',default='Odbiornik DLNA',namespaces=ns)
-            return Renderer(' '.join(name.split())[:120],sender,control,service,connection[1],connection[0])
+            manufacturer=device.findtext('d:manufacturer',default='',namespaces=ns)
+            model=device.findtext('d:modelName',default='',namespaces=ns)
+            return Renderer(' '.join(name.split())[:120],sender,control,service,connection[1],connection[0],manufacturer[:120],model[:120])
     return None
 
 def ssdp_location(data,sender):
@@ -179,3 +183,38 @@ def choose_media(choices,protocols):
             if len(row)==4 and row[0].lower() in ('http-get','*') and (row[2].lower() in aliases or row[2] in ('*','video/*')):
                 return dict(choice,mime=choice['mime'] if row[2] in ('*','video/*') else row[2])
     raise DlnaError('Odbiornik nie deklaruje obsługi dostępnego formatu materiału (HLS/DASH/MP4).')
+
+def prepare_media(device,material,record):
+    """Log bounded capabilities, never URLs, friendly names, serials or session data."""
+    def field(value):
+        value=' '.join(str(value).split())[:120]
+        value=re.sub(r'https?://\S+','[adres]',value,flags=re.I)
+        value=re.sub(r'\b(?:\d{1,3}\.){3}\d{1,3}\b','[IP]',value)
+        value=re.sub(r'(?i)\b(?:[0-9a-f]{2}[:-]){5}[0-9a-f]{2}\b','[MAC]',value)
+        return value or 'brak danych'
+    record('DLNA','Diagnostyka 2; producent: '+field(device.manufacturer)+'; model: '+field(device.model)+'; AVTransport: '+field(device.service)+'; ConnectionManager: '+str(bool(device.connection)))
+    record('DLNA','Etap: pobranie formatów materiału; rodzaj: '+field(material.kind))
+    choices=media_candidates(material)
+    record('DLNA','Formaty materiału: '+', '.join(sorted({c['label']+' ('+c['mime']+')' for c in choices})))
+    try:
+        protocols=device.protocols()
+    except DlnaError as exc:
+        record('DLNA','GetProtocolInfo nie powiodło się: '+str(exc)+'; próba bez deklaracji formatów.')
+        protocols=[]
+    record('DLNA','GetProtocolInfo: liczba deklaracji Sink: '+str(len(protocols))+'; porównanie MIME, bez oceny kodeków i profili DLNA.')
+    # Only protocol and MIME are relevant to our matcher. Never log the raw response.
+    formats=set()
+    for raw in protocols:
+        parts=raw.split(':',3)
+        if len(parts)==4 and re.fullmatch(r'[a-zA-Z0-9*+./_-]{1,100}',parts[0]) and re.fullmatch(r'[a-zA-Z0-9*+./_-]{1,100}',parts[2]):
+            formats.add(parts[0]+':'+parts[2])
+        else:formats.add('[nieprawidłowa deklaracja]')
+    for offset in range(0,min(len(formats),100),8):
+        record('DLNA','Formaty odbiornika: '+', '.join(sorted(formats)[offset:offset+8]))
+    if len(formats)>100:record('DLNA','Lista formatów skrócona do 100 różnych deklaracji.')
+    try:media=choose_media(choices,protocols)
+    except DlnaError:
+        record('DLNA','Etap: brak zgodności deklaracji MIME. SetAVTransportURI i Play NIE zostały wysłane; nie potwierdzono rzeczywistej niezgodności urządzenia.')
+        raise
+    record('DLNA','Wybrano: '+media['label']+' ('+media['mime']+'); adres strumienia pominięty.')
+    return media

@@ -62,13 +62,16 @@ class DlnaDialog(wx.Dialog):
         if not 0<=index<len(self.devices):self.say('Najpierw wybierz odbiornik DLNA.');return
         device=self.devices[index];self.say('Przygotowywanie materiału do przesłania…')
         def job():
-            choices=dlna.media_candidates(self.material)
-            try:protocols=device.protocols()
-            except dlna.DlnaError:protocols=[]
-            media=dlna.choose_media(choices,protocols)
-            device.set_media(media['url'],self.material.title,media['mime']);device.play()
+            media=dlna.prepare_media(device,self.material,diagnostics.record)
+            diagnostics.record('DLNA','Etap: SetAVTransportURI.')
+            device.set_media(media['url'],self.material.title,media['mime'])
+            diagnostics.record('DLNA','SetAVTransportURI potwierdzone; etap: Play.')
+            device.play()
+            diagnostics.record('DLNA','Play potwierdzone; etap: GetTransportInfo.')
             try:state=device.state()
-            except dlna.DlnaError:state='UNKNOWN'
+            except dlna.DlnaError as exc:
+                diagnostics.record('DLNA','GetTransportInfo: '+str(exc));state='UNKNOWN'
+            diagnostics.record('DLNA','Stan po Play: '+state)
             return device,state
         def done(value):
             device,state=value;self.active_device=device

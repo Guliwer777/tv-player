@@ -1,6 +1,6 @@
 # TV Player — dodatek do NVDA
 
-Autor: **Guliwer**. Wydanie lokalne **0.31.0-dev — beta**.
+Autor: **Guliwer**. Wydanie lokalne **0.31.1-dev — beta**.
 
 Dostępny z klawiatury interfejs do TVP VOD, TVP Sport, CANAL+, Polsat Box Go
 oraz eksperymentalnie Playera. Projekt niezależny, nie jest oficjalną aplikacją
@@ -28,7 +28,11 @@ z oficjalnego źródła Microsoft.
 
 ## Funkcje
 
-### Zmiany w 0.31.0-dev — pełny ekran i DLNA
+### Zmiany w 0.31.1-dev — diagnostyka DLNA
+
+Raport po próbie wysłania zawiera producenta i model odbiornika, deklarowane protokoły i MIME, formaty materiału oraz etapy poleceń DLNA. Nie zapisuje nazwy własnej telewizora, adresów strumieni, IP, numeru seryjnego ani danych kont. Rozszerzona diagnostyka nie zmienia zasad zgodności ani obsługi DRM.
+
+### Funkcje 0.31.0-dev — pełny ekran i DLNA
 
 **Obraz:** przyciski Pokaż/Ukryj obraz są dostępne u wszystkich dostawców. Strona odtwarzacza działa w oddzielnym oknie, aby nie przełączać samego NVDA w pełny ekran. **F11** lub przycisk „Pełny ekran obrazu” przełącza natywny pełny ekran tego okna. Escape w oknie obrazu wychodzi z pełnego ekranu, a Ukryj obraz wraca do odtwarzania w tle. F11 działa także w oknie dodatku i trybie poleceń. Telewizor podłączony jako drugi monitor można wykorzystać przez rozszerzony pulpit Windows i przeniesienie aktywnego okna skrótem Windows+Shift+lewo/prawo. Pełny ekran nie omija ograniczeń HDCP wyjścia obrazu.
 
