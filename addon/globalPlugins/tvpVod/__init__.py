@@ -29,6 +29,9 @@ class CatalogDialog(wx.Dialog):
         self.description_token = 0
         self.description_timer = None
         self.description_loader = DescriptionLoader(lambda token,text:wx.CallAfter(self.complete_description,token,text))
+        from .audioDescription import AudioDescriptionLoader
+        self.ad_loader=AudioDescriptionLoader(lambda item,token,state:wx.CallAfter(self.complete_ad,item,token,state))
+        self.ad_timer=None;self.ad_message=''
         self.current_folder = None
         self.offset = 0
         self.history = []
@@ -137,7 +140,9 @@ class CatalogDialog(wx.Dialog):
             material=decode(self.store.find(item.id)['material']) if isinstance(item,BookmarkEntry) else item
         except StopIteration:
             material=None
-        return item.label + (" — obejrzane" if self.store.is_watched(material) else "")
+        from .audioDescription import supported as ad_supported
+        ad=' — audiodeskrypcja' if ad_supported(material) and self.ad_loader.cached(material) is True else ''
+        return item.label + ad + (" — obejrzane" if self.store.is_watched(material) else "")
 
     def refresh_watched_labels(self):
         if self.alive:
@@ -757,6 +762,8 @@ class CatalogDialog(wx.Dialog):
         ui.message(message or f"{self.heading}. Liczba pozycji: {count}.")
 
     def on_select(self, event):
+        if self.ad_timer:self.ad_timer.Stop();self.ad_timer=None
+        self.ad_loader.cancel();self.ad_message=''
         if getattr(self,'access_timer',None):self.access_timer.Stop()
         if getattr(self,'access_stop',None):self.access_stop.set()
         self.description_token+=1
@@ -783,6 +790,21 @@ class CatalogDialog(wx.Dialog):
                 self.description_timer=wx.CallLater(350,self.guide.load,item)
             elif isinstance(item,Material):
                 self.description_timer=wx.CallLater(350,self.description_loader.request,item,self.description_token)
+                from .audioDescription import supported as ad_supported
+                if ad_supported(item):
+                    self.ad_timer=wx.CallLater(650,self.ad_loader.request,item,self.description_token)
+
+    def complete_ad(self,item,token,state):
+        if not self.alive or token!=self.description_token:return
+        index=self.list.GetSelection()
+        if not 0<=index<len(self.results) or self.results[index]!=item:return
+        self.ad_message=('Audiodeskrypcja dostępna.' if state is True else
+                         'Nie znaleziono oznaczenia audiodeskrypcji w danych TVP.' if state is False else
+                         'Nie udało się ustalić dostępności audiodeskrypcji.')
+        old=self.list.GetString(index);new=self.item_label(item)
+        if old!=new:self.list.SetString(index,new)
+        self.description.ChangeValue(self.description.GetValue()+'\n\n'+self.ad_message)
+        if state is True and old!=new and self.IsShown() and self.FindFocus()==self.list:ui.message('Audiodeskrypcja dostępna.')
 
     def check_polsat_access(self,item,index,token,stop):
         if not self.alive or stop.is_set():return
@@ -911,7 +933,7 @@ class CatalogDialog(wx.Dialog):
             index=self.list.GetSelection()
             selected=self.results[index] if 0<=index<len(self.results) else None
             status=getattr(selected,'access_status','')
-            self.description.ChangeValue((status.capitalize()+'.\n' if status else '')+text)
+            self.description.ChangeValue((status.capitalize()+'.\n' if status else '')+text+('\n\n'+self.ad_message if self.ad_message else ''))
 
     def on_close(self, event):
         self.Hide()
@@ -928,6 +950,8 @@ class CatalogDialog(wx.Dialog):
         if getattr(self,'access_stop',None):self.access_stop.set()
         self.alive = False
         self.description_loader.close()
+        self.ad_loader.close()
+        if self.ad_timer:self.ad_timer.Stop()
         if self.description_timer:self.description_timer.Stop()
         if self.playback and self.playback.alive:
             self.playback.stop_playback(notify=False)

@@ -113,8 +113,6 @@ class PlaybackDialog(wx.Dialog):
         self.fullscreen_button=wx.Button(self,label='Pełny ekran obrazu (F11)')
         self.fullscreen_button.Bind(wx.EVT_BUTTON,lambda event:self.execute_command('fullscreen'))
         layout.Add(self.fullscreen_button,0,wx.ALL,5)
-        cast=wx.Button(self,label='Wyślij materiał do DLNA…')
-        cast.Bind(wx.EVT_BUTTON,self.open_dlna);layout.Add(cast,0,wx.ALL,5)
         layout.Add(wx.StaticText(self, label="Czas odtwarzania i przewijanie:"), 0, wx.LEFT, 5)
         self.timeline = NamedSlider(self, value=0, minValue=0, maxValue=1,
                                     name="Czas odtwarzania i przewijanie",
@@ -168,17 +166,6 @@ class PlaybackDialog(wx.Dialog):
             except (OSError,AttributeError):pass
         self.send('window-show' if self.image_visible else 'window-hide')
         self.image_button.SetLabel('Ukryj obraz' if self.image_visible else 'Pokaż obraz')
-
-    def open_dlna(self,event=None):
-        from .dlnaDialog import DlnaDialog
-        if self.material.kind in ('CANAL','CANAL_LIVE','POLSAT','POLSAT_LIVE','PLAYERPL','PLAYERPL_LIVE'):
-            from .dlna import DlnaError,media_candidates
-            try:media_candidates(self.material)
-            except DlnaError as error:ui.message(str(error))
-            return
-        if getattr(self,'dlna_dialog',None) and self.dlna_dialog.alive:
-            self.dlna_dialog.Show();self.dlna_dialog.Raise();return
-        self.dlna_dialog=DlnaDialog(self,self.material);self.dlna_dialog.Show()
 
     def on_key(self, event):
         key = event.GetKeyCode()
@@ -323,7 +310,6 @@ class PlaybackDialog(wx.Dialog):
     def load_next(self, material, display_title=None):
         """Replace the media while retaining this window, keyboard focus and seek step."""
         self.playback_generation += 1
-        if getattr(self,'dlna_dialog',None) and self.dlna_dialog.alive:self.dlna_dialog.Close()
         if self.player:self.player.close()
         self.player=None
         self.material=material

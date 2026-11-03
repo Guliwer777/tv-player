@@ -1,6 +1,6 @@
 # TV Player — dodatek do NVDA
 
-Autor: **Guliwer**. Wydanie lokalne **0.31.1-dev — beta**.
+Autor: **Guliwer**. Wydanie lokalne **0.32.0-dev — beta**.
 
 Dostępny z klawiatury interfejs do TVP VOD, TVP Sport, CANAL+, Polsat Box Go
 oraz eksperymentalnie Playera. Projekt niezależny, nie jest oficjalną aplikacją
@@ -28,23 +28,13 @@ z oficjalnego źródła Microsoft.
 
 ## Funkcje
 
-### Zmiany w 0.31.1-dev — diagnostyka DLNA
+### Zmiany w 0.32.0-dev
 
-Raport po próbie wysłania zawiera producenta i model odbiornika, deklarowane protokoły i MIME, formaty materiału oraz etapy poleceń DLNA. Nie zapisuje nazwy własnej telewizora, adresów strumieni, IP, numeru seryjnego ani danych kont. Rozszerzona diagnostyka nie zmienia zasad zgodności ani obsługi DRM.
+Po zatrzymaniu zaznaczenia na filmie lub odcinku TVP VOD dodatek sprawdza audiodeskrypcję w tle bez uruchamiania odtwarzania. Potwierdzona ścieżka dopisuje „audiodeskrypcja” przy tytule i jest ogłaszana, gdy lista ma fokus. Szczegóły znajdują się także w opisie. Dla seriali sprawdzane są poszczególne odcinki; wynik nie jest uogólniany na cały serial. Brak oznaczenia lub błąd sprawdzania nie jest traktowany jako dowód braku AD.
 
-### Funkcje 0.31.0-dev — pełny ekran i DLNA
+Sprawdzanie rusza po 650 ms zatrzymania na pozycji, działa w jednym wątku roboczym i pomija nieaktualne zaznaczenia. Pamięć wyników jest ograniczona do 256 materiałów i znika po ponownym uruchomieniu NVDA. Wynik dodatni wygasa po 6 godzinach, brak oznaczenia po 15 minutach, a błąd po minucie. Nie są pobierane fragmenty filmu ani licencje DRM.
 
-**Obraz:** przyciski Pokaż/Ukryj obraz są dostępne u wszystkich dostawców. Strona odtwarzacza działa w oddzielnym oknie, aby nie przełączać samego NVDA w pełny ekran. **F11** lub przycisk „Pełny ekran obrazu” przełącza natywny pełny ekran tego okna. Escape w oknie obrazu wychodzi z pełnego ekranu, a Ukryj obraz wraca do odtwarzania w tle. F11 działa także w oknie dodatku i trybie poleceń. Telewizor podłączony jako drugi monitor można wykorzystać przez rozszerzony pulpit Windows i przeniesienie aktywnego okna skrótem Windows+Shift+lewo/prawo. Pełny ekran nie omija ograniczeń HDCP wyjścia obrazu.
-
-**Wyślij materiał do DLNA…:** na ekranie odtwarzacza. Po otwarciu wyszukiwane są odbiorniki MediaRenderer/AVTransport w tej samej sieci lokalnej IPv4; F5 ponawia wyszukiwanie. Użytkownik wybiera urządzenie i Wyślij materiał. Implementacja używa SSDP M-SEARCH, opisu urządzenia, opcjonalnego GetProtocolInfo i poleceń UPnP AVTransport SetAVTransportURI, Play, Pause, Stop oraz GetTransportInfo — ten sam model protokołu opisuje [dokumentacja Microsoft](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-dlnhnd/65719e97-3b71-4cdd-a036-e2170c22e4d0) i [przykład Sony](https://github.com/sonydevworld/audio_control_api_examples/blob/master/DLNA/AVTransport/play_file.adoc).
-
-Telewizor sam pobiera strumień, **nie jest to przesyłanie pulpitu ani zalogowanej przeglądarki**. Bieżąca implementacja eksportuje jedynie oficjalne strumienie **TVP VOD i TVP Sport bez DRM**, jeśli format odpowiada możliwościom odbiornika (MP4/HLS/DASH). Podpisany adres strumienia jest przekazywany wybranemu odbiornikowi, bez plików kont, haseł i licencji. Nie powstaje lokalny serwer strumieniujący, nie są otwierane porty routera ani zmieniane reguły zapory. Część telewizorów nie obsługuje HTTPS/HLS/DASH lub wymaga zgody na ekranie; sieć gościnna/izolacja urządzeń może uniemożliwić wykrycie.
-
-**CANAL+, Polsat Box Go i Player:** strumienie są obsługiwane w zalogowanym oficjalnym odtwarzaczu, więc ta funkcja DLNA ich nie eksportuje. Przy próbie pojawia się wyjaśnienie. Nie zaimplementowano Chromecasta/AirPlay/Miracast. Dla tych platform użyj aplikacji dostawcy na TV, jego własnej obsługi przesyłania albo HDMI/wyświetlacza Windows. Nie gwarantuje się bezprzewodowego kopiowania chronionego obrazu.
-
-Okno DLNA ma własne przyciski Pauza, Wznów, Zatrzymaj i Sprawdź stan. Zamknięcie okna nie zatrzymuje odbiornika; ponowne otwarcie pozwala nim sterować. Po potwierdzeniu przez TV stanu PLAYING lokalny odtwarzacz jest pauzowany. Samo przyjęcie polecenia przez urządzenie jest komunikowane oddzielnie od potwierdzonego stanu odtwarzania. Brak synchronizacji czasu, ścieżek audio i automatycznego następnego odcinka na TV; materiał zwykle zaczyna się od początku.
-
-**Sprawdzono:** 262 testy Python; testy skryptów wszystkich odtwarzaczy; rzeczywiste wyciszone odtwarzanie TVP z przełączeniem pełnego ekranu i ukryciem obrazu bez zatrzymania czasu; natywne okno DLNA; komunikację SOAP SetAVTransportURI/Play/GetTransportInfo/Pause/Stop z lokalnym testowym odbiornikiem; odrzucanie DRM i strumieni wymagających sesji dostawcy; filtrowanie SSDP i lokalnych adresów urządzeń. **Nie testowano fizycznego telewizora DLNA**, rzeczywistego dostarczenia obrazu i dźwięku na nim ani ponownego odtwarzania u wszystkich dostawców. DLNA jest eksperymentalne.
+Usunięto opcje DLNA. Nadal dostępne są Pokaż/Ukryj obraz i pełny ekran F11.
 
 ### Poprawka 0.30.2-dev
 

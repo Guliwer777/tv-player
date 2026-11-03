@@ -40,7 +40,7 @@ def version():
     try:
         import addonHandler
         return str(addonHandler.getCodeAddon().manifest['version'])
-    except (ImportError,AttributeError,KeyError):return '0.31.1-dev'
+    except (ImportError,AttributeError,KeyError):return '0.32.0-dev'
 
 def report(root,context=''):
     try:
