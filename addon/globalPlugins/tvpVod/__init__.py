@@ -1036,6 +1036,17 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
             else:
                 self.command_mode.arm()
 
+    @script(description="Zatrzymaj odtwarzanie i zamknij TV Player.", gesture="kb:NVDA+shift+control+v")
+    def script_stopAndClose(self, gesture):
+        if not globalVars.appArgs.secure:
+            wx.CallAfter(self.stop_and_close)
+
+    def stop_and_close(self):
+        self.command_mode.cancel(notify=False)
+        if self.dialog and self.dialog.alive:
+            self.dialog.shutdown()
+            ui.message("TV Player zakończony.")
+
     def notify_command_mode(self, active):
         if self._runtime_stopping:
             return

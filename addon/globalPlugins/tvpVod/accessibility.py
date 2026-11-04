@@ -121,6 +121,7 @@ Delete na zakładce — usuń wybraną zakładkę.
 Odtwarzacz:
 Ctrl+Spacja — pauza lub wznowienie.
 Alt+F4 — ukryj okno; odtwarzanie i tryb poleceń działają dalej w tle.
+NVDA+Shift+Ctrl+V — zatrzymaj odtwarzanie i zamknij TV Player, również gdy działa w tle.
 Ctrl+T — wypowiedz bieżący czas i pełny czas trwania materiału.
 Ctrl+strzałka w lewo/prawo — cofnij lub przewiń o wybrany krok.
 Ctrl+strzałka góra/dół — zwiększ lub zmniejsz krok: 5, 10, 15, 30, 60 sekund. Wybrany krok jest zapisywany i zachowywany przy kolejnych materiałach.
