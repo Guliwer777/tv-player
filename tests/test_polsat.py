@@ -1,6 +1,8 @@
 import sys,unittest,tempfile,base64,hashlib,hmac,threading
+from contextlib import nullcontext
+from http.client import RemoteDisconnected
 from pathlib import Path
-from unittest.mock import Mock,patch
+from unittest.mock import MagicMock,Mock,patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'addon/globalPlugins/tvpVod'))
 import polsat_account as account
 import polsat_api as api
@@ -70,6 +72,31 @@ class PolsatTests(unittest.TestCase):
   with patch.object(api,'rpc') as rpc:
    with self.assertRaises(api.PolsatError):pair.poll()
    rpc.assert_not_called()
+ def test_catalogue_connection_respects_https_proxy(self):
+  with patch.object(api,'getproxies',return_value={'https':'http://proxy.example:3128'}), \
+       patch.object(api,'proxy_bypass',return_value=False),patch.object(api,'HTTPSConnection') as direct:
+   with api.catalogue_connection() as connection:
+    self.assertIsNone(connection)
+   direct.assert_not_called()
+ def test_catalogue_query_reopens_closed_keepalive_without_redirecting(self):
+  connection=Mock(sock=object())
+  success=MagicMock(status=200)
+  success.__enter__.return_value=success
+  success.read.return_value=b'{"result":{"statusDescription":"has access"}}'
+  connection.getresponse.side_effect=[RemoteDisconnected(),success]
+  result=api.rpc('drm','checkProductAccess',{},connection=connection)
+  self.assertEqual(result,{'statusDescription':'has access'})
+  connection.close.assert_called_once()
+  self.assertEqual([call.args[:2] for call in connection.request.call_args_list],[('POST','/rpc/drm/')]*2)
+
+  redirect=MagicMock(status=302)
+  redirect.__enter__.return_value=redirect
+  connection.reset_mock()
+  connection.getresponse.side_effect=None
+  connection.getresponse.return_value=redirect
+  with self.assertRaisesRegex(api.PolsatError,'przekierowanie'):
+   api.rpc('drm','checkProductAccess',{},connection=connection)
+  connection.request.assert_called_once()
  def test_url_origin_validation(self):
   self.assertTrue(polsat.official_url('https://polsatboxgo.pl/wideo/x'))
   for url in ['http://polsatboxgo.pl','https://polsatboxgo.pl.evil/x','https://user@polsatboxgo.pl','https://polsatboxgo.pl:123/x']:
@@ -156,14 +183,17 @@ class PolsatTests(unittest.TestCase):
   self.assertEqual(count,2)
 
  def test_access_filter_keeps_only_explicit_grants(self):
-  from unittest.mock import Mock
   client=Mock();client.record=record()
-  rows=[(polsat.material({'id':str(i),'title':str(i)},True),[]) for i in range(3)]
-  def granted(record,namespace,method,fields):
-   return {'statusDescription':'has access' if fields['product']['id']=='1' else 'no access'}
-  with patch.object(polsat,'authenticated',side_effect=granted) as rpc:
-   self.assertEqual([x.provider_id for x,g in polsat.accessible_channels(rows,client)],['1'])
-   polsat.accessible_channels(rows,client);self.assertEqual(rpc.call_count,3)
+  rows=[(polsat.material({'id':str(i),'title':str(i)},True),[]) for i in range(200)]
+  def granted(record,namespace,method,fields,*,connection):
+   return {'statusDescription':'has access' if int(fields['product']['id']) < 42 else 'no access'}
+  with patch.object(polsat,'authenticated',side_effect=granted) as rpc, \
+       patch.object(polsat,'catalogue_connection',side_effect=lambda:nullcontext(object())):
+   available=polsat.accessible_channels(rows,client)
+   self.assertEqual([item.provider_id for item,genres in available],[str(i) for i in range(42)])
+   self.assertLessEqual(len({call.kwargs['connection'] for call in rpc.call_args_list}),4)
+   polsat.accessible_channels(rows,client)
+   self.assertEqual(rpc.call_count,200)
  def test_unknown_access_status_is_not_presented_as_available(self):
   from unittest.mock import Mock
   client=Mock();client.record=record();rows=[(polsat.material({'id':'1','title':'A'},True),[])]

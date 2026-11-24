@@ -3,16 +3,19 @@ import hashlib
 import re
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import ExitStack
 from datetime import datetime,timedelta,timezone
+from queue import SimpleQueue
 from urllib.parse import quote,urlsplit,urlencode,urlunsplit
 try:
     from .catalog import CatalogError,Folder,Material,plain_text
     from .diagnostics import record as log_diagnostic
-    from .polsat_api import Client,PolsatError,PolsatAccessDenied,authenticated
+    from .polsat_api import Client,PolsatError,PolsatAccessDenied,authenticated,catalogue_connection
 except ImportError:
     from catalog import CatalogError,Folder,Material,plain_text
     from diagnostics import record as log_diagnostic
-    from polsat_api import Client,PolsatError,PolsatAccessDenied,authenticated
+    from polsat_api import Client,PolsatError,PolsatAccessDenied,authenticated,catalogue_connection
 
 HOME='https://polsatboxgo.pl/'
 _cache={}
@@ -68,22 +71,34 @@ def material(row,live=False):
 
 def accessible_channels(rows,client):
     """Only include explicit server grants; cache scoped to account and profile."""
-    from concurrent.futures import ThreadPoolExecutor
     record=client.record
     scope=(record['clientId'],record['profile']['id'])
+    connections=SimpleQueue()
+
     def allowed(pair):
         item,genres=pair;key=('access',*scope,item.provider_id)
         with _lock:cached=_cache.get(key)
         if cached and time.monotonic()-cached[0]<300:return cached[1]
-        response=authenticated(record,'drm','checkProductAccess',{'product':{'id':item.provider_id,'subType':'tv','type':'media'}})
+        connection=connections.get()
+        try:
+            response=authenticated(record,'drm','checkProductAccess',
+                                   {'product':{'id':item.provider_id,'subType':'tv','type':'media'}},
+                                   connection=connection)
+        finally:
+            connections.put(connection)
         status=response.get('statusDescription') if isinstance(response,dict) else None
         if status not in ('has access','access granted','access','no access'):
             raise PolsatError('Nie udało się jednoznacznie sprawdzić dostępności kanałów Polsat Box Go. Odśwież listę.')
         grant=status!='no access'
         with _lock:_cache[key]=(time.monotonic(),grant)
         return grant
-    # No stream or licence is opened. Keep RPC concurrency bounded.
-    with ThreadPoolExecutor(max_workers=4) as pool:grants=list(pool.map(allowed,rows))
+    # Lease each connection to one access check at a time and close it after all workers finish.
+    workers=4
+    with ExitStack() as stack:
+        for _ in range(workers):
+            connections.put(stack.enter_context(catalogue_connection()))
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            grants=list(pool.map(allowed,rows))
     client.latest()  # Never publish results for an account/profile changed meanwhile.
     return [pair for pair,grant in zip(rows,grants) if grant]
 
@@ -237,36 +252,40 @@ def all_channels_folder(count):
 
 def browse(folder,offset=0):
     try:
-        client=Client()
-        if folder.resource=='root':
-            result=client.call('navigation','getHomeMenu')
-            out=[]
-            for row in result if isinstance(result,list) else []:
-                place=row.get('place',{})
-                if place.get('type')=='category' and str(place.get('value','')).isdigit():
-                    out.append(Folder(identifier('category:'+str(place['value'])),plain_text(row.get('name','Kategoria')),'POLSAT','category:'+str(place['value'])))
-            return out,False
-        if folder.resource=='live' or folder.resource.startswith('live:'):
-            rows=channels(client)
-            if folder.resource=='live':
-                genres=sorted({g for item,gs in rows for g in gs})
-                return [all_channels_folder(len(rows))]+[
-                    Folder(identifier('live:'+g),g,'POLSAT','live:'+g) for g in genres],False
-            group=folder.resource[5:]
-            return [item for item,gs in rows if group=='all' or group in gs],False
-        if folder.resource.startswith(('category:','seasons:')):
-            category=folder.resource.split(':',1)[1]
-            if not category.isdigit():raise PolsatError('Niepoprawna kategoria Polsat Box Go.')
-            if folder.resource.startswith('seasons:'):
-                result=client.call('navigation','getSubCategories',{'catid':int(category)})
-                rows=result if isinstance(result,list) else result.get('results',[]) if isinstance(result,dict) else []
-                return parse_items(rows),False
-            result=client.call('navigation','getCategoryContentWithFlatNavigation',{'catid':int(category),'limit':50,'offset':offset,
-                'collection':{'default':True,'name':'Alfabetycznie','type':'sortedby','value':'13'}})
-            rows=result.get('results',[]) if isinstance(result,dict) else []
-            return parse_items(rows),offset+50<result.get('total',len(rows))
-        raise PolsatError('Nieznany katalog Polsat Box Go.')
+        with catalogue_connection() as connection:
+            return _browse(Client(connection=connection),folder,offset)
     except PolsatError as exc:raise CatalogError(str(exc)) from None
+
+
+def _browse(client,folder,offset):
+    if folder.resource=='root':
+        result=client.call('navigation','getHomeMenu')
+        out=[]
+        for row in result if isinstance(result,list) else []:
+            place=row.get('place',{})
+            if place.get('type')=='category' and str(place.get('value','')).isdigit():
+                out.append(Folder(identifier('category:'+str(place['value'])),plain_text(row.get('name','Kategoria')),'POLSAT','category:'+str(place['value'])))
+        return out,False
+    if folder.resource=='live' or folder.resource.startswith('live:'):
+        rows=channels(client)
+        if folder.resource=='live':
+            genres=sorted({g for item,gs in rows for g in gs})
+            return [all_channels_folder(len(rows))]+[
+                Folder(identifier('live:'+g),g,'POLSAT','live:'+g) for g in genres],False
+        group=folder.resource[5:]
+        return [item for item,gs in rows if group=='all' or group in gs],False
+    if folder.resource.startswith(('category:','seasons:')):
+        category=folder.resource.split(':',1)[1]
+        if not category.isdigit():raise PolsatError('Niepoprawna kategoria Polsat Box Go.')
+        if folder.resource.startswith('seasons:'):
+            result=client.call('navigation','getSubCategories',{'catid':int(category)})
+            rows=result if isinstance(result,list) else result.get('results',[]) if isinstance(result,dict) else []
+            return parse_items(rows),False
+        result=client.call('navigation','getCategoryContentWithFlatNavigation',{'catid':int(category),'limit':50,'offset':offset,
+            'collection':{'default':True,'name':'Alfabetycznie','type':'sortedby','value':'13'}})
+        rows=result.get('results',[]) if isinstance(result,dict) else []
+        return parse_items(rows),offset+50<result.get('total',len(rows))
+    raise PolsatError('Nieznany katalog Polsat Box Go.')
 
 
 def parse_items(rows):
