@@ -353,7 +353,7 @@ def parse_items(rows):
     return out
 
 
-def search(keyword, *, stop=None):
+def search(keyword, *, stop=None, on_page=None):
     """Use the provider's search windows, which can contain grouped results."""
     keyword = plain_text(keyword).strip()
     if len(keyword) < 2:
@@ -365,6 +365,8 @@ def search(keyword, *, stop=None):
     with catalogue_connection() as connection:
         client = Client(connection=connection)
         while offset < 500:
+            if stop is not None and stop.is_set():
+                return []
             limit = min(50, 500 - offset)
             payload = client.call('navigation', 'searchContent', {'query': keyword, 'limit': limit, 'offset': offset})
             if stop is not None and stop.is_set():
@@ -378,14 +380,18 @@ def search(keyword, *, stop=None):
             width = payload.get('limit', limit)
             if type(width) is not int or not 0 < width <= limit or payload.get('offset', offset) != offset:
                 raise CatalogError('Nieprawidłowy zakres wyników Polsat Box Go.')
+            previous_count = len(results)
             for item in parse_items(rows):
                 if item.id not in seen:
                     seen.add(item.id)
                     results.append(item)
             # A single series may represent several matches in this window.
             offset += width
-            if not rows or offset >= total:
+            if not rows or offset >= min(total, 500):
                 break
+            if on_page is not None and len(results) > previous_count:
+                client.latest()
+                on_page(results.copy())
         client.latest()
     return results
 

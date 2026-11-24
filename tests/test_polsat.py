@@ -147,6 +147,23 @@ class PolsatTests(unittest.TestCase):
    self.assertEqual(polsat.search('serial',stop=stop),[])
    client.call.assert_called_once()
 
+ def test_search_publishes_first_page_before_requesting_the_next(self):
+  client=Mock()
+  publish=Mock()
+  def serve(namespace,method,fields):
+   offset=fields['offset']
+   if offset:
+    publish.assert_called_once()
+    self.assertEqual([item.title for item in publish.call_args.args[0]],['Serial'])
+   return {'results':[{'id':str(offset+1),'name':'Serial' if not offset else 'Drugi'}],
+           'offset':offset,'limit':50,'total':75}
+  client.call.side_effect=serve
+  with patch.object(polsat,'Client',return_value=client), \
+       patch.object(polsat,'catalogue_connection',return_value=nullcontext(None)):
+   self.assertEqual([item.title for item in polsat.search('serial',on_page=publish)],['Serial','Drugi'])
+  publish.assert_called_once()
+  self.assertEqual([item.title for item in publish.call_args.args[0]],['Serial'])
+
  def test_current_programmes_are_fetched_in_batch_and_added_to_labels(self):
   from datetime import datetime,timedelta,timezone
   from unittest.mock import Mock

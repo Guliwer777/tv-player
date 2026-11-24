@@ -15,6 +15,7 @@ class SearchDialog(wx.Dialog):
         super().__init__(owner,title='Wyszukaj w: '+title,size=(850,620))
         self.owner=owner;self.folder=folder;self.source_rows=list(rows)
         self.alive=True;self.busy=False;self.loaded=False;self.rows=[];self.visible=[]
+        self.submitted_keyword=None
         self.stop=threading.Event();self.failed=0
         layout=wx.BoxSizer(wx.VERTICAL)
         layout.Add(wx.StaticText(self,label='Zakres: '+title+'. Wpisz tytuł programu lub nazwę kanału.'),0,wx.ALL,8)
@@ -55,30 +56,58 @@ class SearchDialog(wx.Dialog):
         elif not route_player_shortcut(self.owner,event):event.Skip()
 
     def search(self,event=None,force=False):
-        if self.busy:return
         keyword = self.query.GetValue()
         if not keyword.strip():ui.message('Wpisz szukany tytuł lub kanał.');return
-        if self.loaded and not force:self.filter();self.list.SetFocus();return
-        self.busy=True;self.button.Disable()
+        polsat = scopedSearch.polsat_catalogue(self.folder)
+        same_query = self.submitted_keyword == keyword
+        if self.busy:
+            if not polsat or (same_query and not force):
+                return
+            self.stop.set()
+        if self.loaded and not force and (not polsat or same_query):
+            self.filter()
+            if self.visible or not polsat:
+                self.list.SetFocus()
+            return
+        if polsat:
+            self.rows = []
+            self.filter()
+        self.submitted_keyword = keyword
+        self.stop = stop = threading.Event()
+        self.loaded=False;self.busy=True;self.button.Disable()
         self.status.SetLabel('Przeszukiwanie katalogu usługi…' if scopedSearch.searchable_catalogue(self.folder) else 'Pobieranie listy stacji i ramówek…')
-        def progress(done,total,rows,failed):wx.CallAfter(self.progress,done,total,rows,failed)
+        def progress(done,total,rows,failed):
+            wx.CallAfter(self.progress,done,total,rows,failed,keyword,stop)
         def worker():
             try:
-                rows,failed=scopedSearch.collect(self.folder,self.source_rows,self.stop,progress,force=force,keyword=keyword);error=''
+                rows,failed=scopedSearch.collect(self.folder,self.source_rows,stop,progress,force=force,keyword=keyword);error=''
             except Exception:rows=[];failed=0;error='Nie udało się pobrać danych tego zakresu. Możesz ponowić wyszukiwanie.'
-            wx.CallAfter(self.complete,rows,failed,error,keyword)
+            wx.CallAfter(self.complete,rows,failed,error,keyword,stop)
         threading.Thread(target=worker,daemon=True).start()
 
-    def progress(self,done,total,rows,failed):
-        if not self.alive:return
-        self.rows=rows;self.failed=failed;self.filter()
+    def progress(self,done,total,rows,failed,keyword,stop):
+        if not self.alive or stop.is_set():return
+        had_results = bool(self.visible)
+        polsat = scopedSearch.polsat_catalogue(self.folder)
+        self.rows=rows;self.failed=failed;self.filter(append=polsat)
+        if polsat:
+            self.status.SetLabel(f'Wyniki: {len(self.visible)}. Pobieranie kolejnych…')
+            if not had_results:
+                self.focus_results(keyword)
+            return
         if total:
             self.status.SetLabel(f'Pobrano {done} z {total} stacji. Brak danych lub błąd: {failed}. Wyniki są częściowe do zakończenia pobierania.')
         else:self.status.SetLabel(f'Przeszukano {done} części katalogu. Wyniki pojawią się po zakończeniu.')
 
-    def complete(self,rows,failed,error,keyword):
-        if not self.alive:return
-        self.rows=rows;self.failed=failed;self.loaded=not bool(error);self.busy=False;self.button.Enable();self.filter()
+    def complete(self,rows,failed,error,keyword,stop):
+        if not self.alive or stop.is_set():return
+        polsat = scopedSearch.polsat_catalogue(self.folder)
+        had_results = polsat and bool(self.visible)
+        if polsat and error and self.rows:
+            rows = self.rows
+            error = 'Pobrano część wyników Polsat Box Go. Naciśnij F5, aby ponowić.'
+        self.rows=rows;self.failed=failed;self.loaded=not bool(error);self.busy=False;self.button.Enable()
+        self.filter(append=polsat)
         if scopedSearch.searchable_catalogue(self.folder):
             message=error or f'Zakończono. Wyników: {len(self.visible)}.'
             spoken=error or f'Wyszukiwanie zakończone. Wyników: {len(self.visible)}.'
@@ -86,9 +115,14 @@ class SearchDialog(wx.Dialog):
             message=error or f'Zakończono. Wyników: {len(self.visible)}. Stacje bez ramówki lub z błędem: {failed}. Zakres do siedmiu dni, według danych dostawcy.'
             spoken=error or f'Wyszukiwanie zakończone. Wyników: {len(self.visible)}. Stacje bez danych: {failed}.'
         self.status.SetLabel(message)
+        if not error and not had_results:
+            self.focus_results(keyword)
+        if not polsat or self.IsActive():
+            ui.message(spoken)
+
+    def focus_results(self, keyword):
         if (
-            not error
-            and self.visible
+            self.visible
             and self.folder
             and self.folder.kind in ('POLSAT', 'PLAYERPL')
             and self.IsActive()
@@ -96,15 +130,20 @@ class SearchDialog(wx.Dialog):
             and self.query.GetValue() == keyword
         ):
             self.list.SetFocus()
-        ui.message(spoken)
 
-    def filter(self,event=None):
+    def filter(self,event=None,*,append=False):
+        previous = self.visible
         selected=self.selected()
         self.visible=scopedSearch.matching(self.rows,self.query.GetValue())
         def label(row):
             if 'start' not in row:return row['material'].label
             from .programmeFormat import event_label,DEFAULT,channel_name
             return event_label(row,channel_name(row['material']),self.owner.store.settings.get('programmeOrder',DEFAULT))
+        if append and previous and self.visible[:len(previous)] == previous:
+            added = self.visible[len(previous):]
+            if added:
+                self.list.AppendItems([label(row) for row in added])
+            return
         self.list.Set([label(row) for row in self.visible])
         if self.visible:self.list.SetSelection(self.visible.index(selected) if selected in self.visible else 0)
 

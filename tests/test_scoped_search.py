@@ -1,6 +1,6 @@
 import importlib,sys,types,unittest,threading,weakref
 from pathlib import Path
-from unittest.mock import Mock,call,patch
+from unittest.mock import ANY,Mock,call,patch
 if __package__:
  from .test_commands import method
 else:
@@ -44,9 +44,14 @@ class ScopedTests(unittest.TestCase):
  def test_polsat_catalogue_search_uses_provider_search(self):
   root=Folder(0,'Polsat','POLSAT','root');wanted=self.channel(11,'Dobry film')
   polsat=importlib.import_module('tvpVod.polsat')
-  with patch.object(polsat,'search',return_value=[wanted]) as search:
-   self.assertEqual(m.catalogue_search(root,'dobry',self.stop,lambda *args:None),[wanted])
-  search.assert_called_once_with('dobry',stop=self.stop)
+  progress=Mock()
+  def provider_search(keyword,*,stop,on_page):
+   on_page([wanted])
+   return [wanted]
+  with patch.object(polsat,'search',side_effect=provider_search) as search:
+   self.assertEqual(m.catalogue_search(root,'dobry',self.stop,progress),[wanted])
+  search.assert_called_once_with('dobry',stop=self.stop,on_page=ANY)
+  progress.assert_called_once_with(1,0,[{'material':wanted}],0)
  def test_player_catalogue_search_uses_provider_search(self):
   root=Folder(0,'Player','PLAYERPL','root');wanted=self.channel(12,'Dobry film')
   player=importlib.import_module('tvpVod.playerpl')
@@ -62,6 +67,7 @@ class ScopedTests(unittest.TestCase):
   ui=types.SimpleNamespace(message=Mock())
   complete=method('scopedSearchDialog.py','SearchDialog','complete',{'scopedSearch':m,'ui':ui})
   filter_rows=method('scopedSearchDialog.py','SearchDialog','filter',{'scopedSearch':m})
+  focus_results=method('scopedSearchDialog.py','SearchDialog','focus_results',{})
   keyword='świat według kiepskich'
   for kind in ('POLSAT','PLAYERPL'):
    material=Material(1,'Świat według Kiepskich','','',kind,False)
@@ -76,16 +82,62 @@ class ScopedTests(unittest.TestCase):
    )
    for scenario,active,focused,query,results,error,expected in scenarios:
     with self.subTest(provider=kind,scenario=scenario):
-     search=Mock(alive=True,folder=Folder(0,kind,kind,'root'),visible=[])
+     search=Mock(alive=True,folder=Folder(0,kind,kind,'root'),visible=[],rows=[])
      search.IsActive.return_value=active
      search.FindFocus.return_value=getattr(search,focused)
      search.query.GetValue.return_value=query
-     search.filter.side_effect=lambda:filter_rows(search)
-     complete(search,results,0,error,keyword)
+     search.filter.side_effect=lambda **options:filter_rows(search,**options)
+     search.focus_results.side_effect=lambda phrase:focus_results(search,phrase)
+     complete(search,results,0,error,keyword,self.stop)
      if expected:
       self.assertEqual(search.list.method_calls,[call.Set([material.label]),call.SetSelection(0),call.SetFocus()])
      else:
       search.list.SetFocus.assert_not_called()
+
+ def test_polsat_pages_append_to_the_focused_list_and_keep_selection(self):
+  ui=types.SimpleNamespace(message=Mock())
+  namespace={'scopedSearch':m,'ui':ui}
+  progress=method('scopedSearchDialog.py','SearchDialog','progress',namespace)
+  complete=method('scopedSearchDialog.py','SearchDialog','complete',namespace)
+  filter_rows=method('scopedSearchDialog.py','SearchDialog','filter',namespace)
+  focus_results=method('scopedSearchDialog.py','SearchDialog','focus_results',namespace)
+  search=Mock(alive=True,folder=Folder(0,'Polsat','POLSAT','root'),visible=[],rows=[])
+  search.IsActive.return_value=True
+  search.FindFocus.return_value=search.query
+  search.query.GetValue.return_value='film'
+  search.filter.side_effect=lambda **options:filter_rows(search,**options)
+  search.focus_results.side_effect=lambda phrase:focus_results(search,phrase)
+  films=[Material(i,f'Film {i}','','','POLSAT',False) for i in range(4)]
+  rows=[{'material':film} for film in films]
+
+  progress(search,2,0,rows[:2],0,'film',self.stop)
+  search.list.Set.assert_called_once_with([film.label for film in films[:2]])
+  search.list.SetSelection.assert_called_once_with(0)
+  search.list.SetFocus.assert_called_once()
+
+  search.FindFocus.return_value=search.list
+  search.list.GetSelection.return_value=1
+  search.selected.return_value=rows[1]
+  progress(search,3,0,rows[:3],0,'film',self.stop)
+  complete(search,rows,0,'','film',self.stop)
+  self.assertEqual(search.visible,rows)
+  self.assertEqual(search.list.AppendItems.call_args_list,[call([films[2].label]),call([films[3].label])])
+  search.list.SetSelection.assert_called_once_with(0)
+  search.list.SetFocus.assert_called_once()
+
+ def test_polsat_submit_replaces_an_older_query_instead_of_filtering_its_results(self):
+  ui=types.SimpleNamespace(message=Mock())
+  thread=types.SimpleNamespace(Event=threading.Event,Thread=Mock())
+  start=method('scopedSearchDialog.py','SearchDialog','search',{'scopedSearch':m,'ui':ui,'threading':thread})
+  search=Mock(alive=True,busy=True,loaded=False,stop=self.stop,submitted_keyword='serial',
+              rows=[{'material':self.channel(1,'Serial')}],folder=Folder(0,'Polsat','POLSAT','root'))
+  search.query.GetValue.return_value='film'
+  start(search)
+  self.assertTrue(self.stop.is_set())
+  self.assertFalse(search.stop.is_set())
+  self.assertEqual(search.submitted_keyword,'film')
+  self.assertEqual(search.rows,[])
+  thread.Thread.return_value.start.assert_called_once()
 
  def test_player_returns_to_selected_result_and_keeps_a_saved_copy(self):
   state=importlib.import_module('tvpVod.state')

@@ -102,9 +102,11 @@ def catalogue_search(folder,keyword,stop,progress):
     query=normalize_title(keyword)
     if len(query)<2:raise CatalogError('Wpisz co najmniej dwa znaki.')
     if folder.kind=='CANAL':raise CatalogError('Wyszukiwanie nie jest dostępne dla CANAL+.')
-    if folder.kind=='POLSAT' and folder.resource=='root':
+    if polsat_catalogue(folder):
         from .polsat import search
-        return search(keyword,stop=stop)
+        def page(items):
+            progress(len(items),0,[{'material':item} for item in items],0)
+        return search(keyword,stop=stop,on_page=page)
     if folder.kind=='PLAYERPL' and folder.resource=='root':
         from .playerpl import search
         if stop.is_set():return []
@@ -131,6 +133,10 @@ def catalogue_search(folder,keyword,stop,progress):
             if not more:break
             offset+=50
     return sorted(found,key=lambda item:search_rank(item,keyword))
+
+
+def polsat_catalogue(folder):
+    return isinstance(folder,Folder) and folder.kind=='POLSAT' and folder.resource=='root'
 
 
 def searchable_catalogue(folder):
