@@ -3,6 +3,7 @@ import hashlib
 import re
 import threading
 import time
+from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
 from datetime import datetime,timedelta,timezone
@@ -18,7 +19,11 @@ except ImportError:
     from polsat_api import Client,PolsatError,PolsatAccessDenied,authenticated,catalogue_connection
 
 HOME='https://polsatboxgo.pl/'
+CATALOGUE_TTL=120
+CATALOGUE_CACHE_SIZE=64
 _cache={}
+_folder_cache=OrderedDict()
+_cache_generation=0
 _lock=threading.Lock()
 
 
@@ -33,11 +38,21 @@ def official_url(url):
 
 
 def clear_cache():
-    with _lock:_cache.clear()
+    global _cache_generation
+    with _lock:
+        _cache.clear()
+        _folder_cache.clear()
+        _cache_generation+=1
     try:
         from .polsat_access import clear
         clear()
     except ImportError:pass
+
+
+def _profile_scope(client):
+    if not client.record.get('profile'):
+        client.ensure_profile()
+    return client.record['clientId'],client.record['profile']['id']
 
 
 def media_id(material):
@@ -74,6 +89,7 @@ def accessible_channels(rows,client):
     record=client.record
     scope=(record['clientId'],record['profile']['id'])
     connections=SimpleQueue()
+    with _lock:generation=_cache_generation
 
     def allowed(pair):
         item,genres=pair;key=('access',*scope,item.provider_id)
@@ -90,7 +106,9 @@ def accessible_channels(rows,client):
         if status not in ('has access','access granted','access','no access'):
             raise PolsatError('Nie udało się jednoznacznie sprawdzić dostępności kanałów Polsat Box Go. Odśwież listę.')
         grant=status!='no access'
-        with _lock:_cache[key]=(time.monotonic(),grant)
+        with _lock:
+            if generation==_cache_generation:
+                _cache[key]=(time.monotonic(),grant)
         return grant
     # Lease each connection to one access check at a time and close it after all workers finish.
     workers=4
@@ -201,10 +219,15 @@ def _channel_catalog(client):
 
 
 def channels(client=None):
-    client=client or Client();client.ensure_profile()
-    key=('channels',client.record['clientId'],client.record['profile']['id'])
-    with _lock:cached=_cache.get(key)
-    if cached and time.monotonic()-cached[0]<120:return cached[1]
+    client=client or Client()
+    key=('channels',*_profile_scope(client))
+    with _lock:
+        generation=_cache_generation
+        cached=_cache.get(key)
+    if cached and time.monotonic()-cached[0]<CATALOGUE_TTL:
+        client.latest()
+        return cached[1]
+    client.ensure_profile()
     try:
         candidates, count = _channel_catalog(client)
     except IncompleteChannelList as first_error:
@@ -242,7 +265,10 @@ def channels(client=None):
             item=replace(item,description='Teraz: '+timing+': '+plain_text(row.get('title','Audycja'))+'\n'+detail+'\n'+item.description)
         else:item=replace(item,description='Brak informacji o bieżącym programie.\n'+item.description)
         enriched.append((item,genres))
-    with _lock:_cache[key]=(time.monotonic(),enriched)
+    client.latest()
+    with _lock:
+        if generation==_cache_generation:
+            _cache[key]=(time.monotonic(),enriched)
     return enriched
 
 
@@ -252,8 +278,33 @@ def all_channels_folder(count):
 
 def browse(folder,offset=0):
     try:
+        client=Client()
+        key=(*_profile_scope(client),folder.resource,offset)
+        live=folder.resource=='live' or folder.resource.startswith('live:')
+        with _lock:
+            generation=_cache_generation
+            cached=_folder_cache.get(key)
+            if cached and time.monotonic()-cached[0]<CATALOGUE_TTL:
+                _folder_cache.move_to_end(key)
+            else:
+                cached=None
+        if cached:
+            client.latest()
+            return list(cached[1]),cached[2]
+
         with catalogue_connection() as connection:
-            return _browse(Client(connection=connection),folder,offset)
+            client.connection=connection
+            rows,more=_browse(client,folder,offset)
+        if rows and not live:
+            client.latest()
+            with _lock:
+                # A request already in progress must not undo an F5 refresh.
+                if generation==_cache_generation:
+                    _folder_cache[key]=(time.monotonic(),tuple(rows),more)
+                    _folder_cache.move_to_end(key)
+                    if len(_folder_cache)>CATALOGUE_CACHE_SIZE:
+                        _folder_cache.popitem(last=False)
+        return rows,more
     except PolsatError as exc:raise CatalogError(str(exc)) from None
 
 

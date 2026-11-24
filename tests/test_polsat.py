@@ -172,6 +172,48 @@ class PolsatTests(unittest.TestCase):
    self.assertEqual(len(polsat.channels(client)),1)
    access.assert_called_once()
   self.assertEqual(client.call.call_count,3)
+  client.ensure_profile.assert_called_once()
+
+ def test_catalogue_cache_is_scoped_to_profile_and_page_and_expires(self):
+  client=Mock()
+  client.record=record()
+  client.call.return_value={'results':[{'id':'1','mediaType':'movie','title':'Film'}],'total':51}
+  folder=polsat.Folder(1,'Filmy','POLSAT','category:1')
+  with patch.object(polsat,'Client',return_value=client), \
+       patch.object(polsat.time,'monotonic',return_value=10) as clock, \
+       patch.object(polsat,'catalogue_connection',side_effect=lambda:nullcontext(None)):
+   items,more=polsat.browse(folder)
+   self.assertTrue(more)
+   items.clear()
+   self.assertEqual(len(polsat.browse(folder)[0]),1)
+   self.assertEqual(client.call.call_count,1)
+   self.assertFalse(polsat.browse(folder,offset=50)[1])
+   self.assertEqual(client.call.call_count,2)
+   client.record=record()
+   client.record['profile']['id']='another-profile'
+   polsat.browse(folder)
+   self.assertEqual(client.call.call_count,3)
+   clock.return_value=10+polsat.CATALOGUE_TTL
+   polsat.browse(folder)
+   self.assertEqual(client.call.call_count,4)
+   polsat.clear_cache()
+   polsat.browse(folder)
+   self.assertEqual(client.call.call_count,5)
+
+ def test_refresh_during_download_prevents_reusing_old_catalogue_page(self):
+  client=Mock()
+  client.record=record()
+  client.call.return_value=[{'name':'Filmy','place':{'type':'category','value':1}}]
+  def first_request(*args):
+   polsat.clear_cache()
+   client.call.side_effect=None
+   return client.call.return_value
+  client.call.side_effect=first_request
+  folder=polsat.Folder(0,'Katalog','POLSAT','root')
+  with patch.object(polsat,'Client',return_value=client), \
+       patch.object(polsat,'catalogue_connection',side_effect=lambda:nullcontext(None)):
+   self.assertEqual(polsat.browse(folder),polsat.browse(folder))
+   self.assertEqual(client.call.call_count,2)
 
  def test_channel_pages_without_total_end_on_empty_page(self):
   client=Mock()
