@@ -56,16 +56,17 @@ class SearchDialog(wx.Dialog):
 
     def search(self,event=None,force=False):
         if self.busy:return
-        if not self.query.GetValue().strip():ui.message('Wpisz szukany tytuł lub kanał.');return
+        keyword = self.query.GetValue()
+        if not keyword.strip():ui.message('Wpisz szukany tytuł lub kanał.');return
         if self.loaded and not force:self.filter();self.list.SetFocus();return
         self.busy=True;self.button.Disable()
         self.status.SetLabel('Przeszukiwanie katalogu usługi…' if scopedSearch.searchable_catalogue(self.folder) else 'Pobieranie listy stacji i ramówek…')
         def progress(done,total,rows,failed):wx.CallAfter(self.progress,done,total,rows,failed)
         def worker():
             try:
-                rows,failed=scopedSearch.collect(self.folder,self.source_rows,self.stop,progress,force=force,keyword=self.query.GetValue());error=''
+                rows,failed=scopedSearch.collect(self.folder,self.source_rows,self.stop,progress,force=force,keyword=keyword);error=''
             except Exception:rows=[];failed=0;error='Nie udało się pobrać danych tego zakresu. Możesz ponowić wyszukiwanie.'
-            wx.CallAfter(self.complete,rows,failed,error)
+            wx.CallAfter(self.complete,rows,failed,error,keyword)
         threading.Thread(target=worker,daemon=True).start()
 
     def progress(self,done,total,rows,failed):
@@ -75,7 +76,7 @@ class SearchDialog(wx.Dialog):
             self.status.SetLabel(f'Pobrano {done} z {total} stacji. Brak danych lub błąd: {failed}. Wyniki są częściowe do zakończenia pobierania.')
         else:self.status.SetLabel(f'Przeszukano {done} części katalogu. Wyniki pojawią się po zakończeniu.')
 
-    def complete(self,rows,failed,error):
+    def complete(self,rows,failed,error,keyword):
         if not self.alive:return
         self.rows=rows;self.failed=failed;self.loaded=not bool(error);self.busy=False;self.button.Enable();self.filter()
         if scopedSearch.searchable_catalogue(self.folder):
@@ -85,8 +86,17 @@ class SearchDialog(wx.Dialog):
             message=error or f'Zakończono. Wyników: {len(self.visible)}. Stacje bez ramówki lub z błędem: {failed}. Zakres do siedmiu dni, według danych dostawcy.'
             spoken=error or f'Wyszukiwanie zakończone. Wyników: {len(self.visible)}. Stacje bez danych: {failed}.'
         self.status.SetLabel(message)
+        if (
+            not error
+            and self.visible
+            and self.folder
+            and self.folder.kind in ('POLSAT', 'PLAYERPL')
+            and self.IsActive()
+            and self.FindFocus() in (self.query, self.button)
+            and self.query.GetValue() == keyword
+        ):
+            self.list.SetFocus()
         ui.message(spoken)
-        # Keep typing/focus intact while the background download completes.
 
     def filter(self,event=None):
         selected=self.selected()

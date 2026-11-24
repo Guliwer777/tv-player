@@ -1,6 +1,6 @@
 import importlib,sys,types,unittest,threading,weakref
 from pathlib import Path
-from unittest.mock import Mock,patch
+from unittest.mock import Mock,call,patch
 if __package__:
  from .test_commands import method
 else:
@@ -57,6 +57,35 @@ class ScopedTests(unittest.TestCase):
   self.assertTrue(m.searchable_catalogue(Folder(0,'Sport','SPORT','root')))
   self.assertFalse(m.searchable_catalogue(Folder(0,'CANAL+','CANAL','root')))
   self.assertFalse(m.searchable_catalogue(Folder(0,'Kanały','POLSAT','live')))
+
+ def test_provider_search_focuses_results_after_loading_the_submitted_query(self):
+  ui=types.SimpleNamespace(message=Mock())
+  complete=method('scopedSearchDialog.py','SearchDialog','complete',{'scopedSearch':m,'ui':ui})
+  filter_rows=method('scopedSearchDialog.py','SearchDialog','filter',{'scopedSearch':m})
+  keyword='świat według kiepskich'
+  for kind in ('POLSAT','PLAYERPL'):
+   material=Material(1,'Świat według Kiepskich','','',kind,False)
+   rows=[{'material':material}]
+   scenarios=(
+    ('finished',True,'query',keyword,rows,'',True),
+    ('another window',False,'query',keyword,rows,'',False),
+    ('moved focus',True,'list',keyword,rows,'',False),
+    ('edited query',True,'query','świat według',rows,'',False),
+    ('no results',True,'query',keyword,[],'',False),
+    ('failed',True,'query',keyword,[],'Błąd pobierania.',False),
+   )
+   for scenario,active,focused,query,results,error,expected in scenarios:
+    with self.subTest(provider=kind,scenario=scenario):
+     search=Mock(alive=True,folder=Folder(0,kind,kind,'root'),visible=[])
+     search.IsActive.return_value=active
+     search.FindFocus.return_value=getattr(search,focused)
+     search.query.GetValue.return_value=query
+     search.filter.side_effect=lambda:filter_rows(search)
+     complete(search,results,0,error,keyword)
+     if expected:
+      self.assertEqual(search.list.method_calls,[call.Set([material.label]),call.SetSelection(0),call.SetFocus()])
+     else:
+      search.list.SetFocus.assert_not_called()
 
  def test_player_returns_to_selected_result_and_keeps_a_saved_copy(self):
   state=importlib.import_module('tvpVod.state')
