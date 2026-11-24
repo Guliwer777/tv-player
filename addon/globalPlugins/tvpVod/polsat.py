@@ -353,22 +353,40 @@ def parse_items(rows):
     return out
 
 
-def search(keyword):
-    """Use Polsat Box Go's published catalogue search, not a category crawl."""
-    keyword=plain_text(keyword).strip()
-    if len(keyword)<2:raise CatalogError('Wpisz co najmniej dwa znaki.')
-    client=Client();results=[];seen=set();offset=0
-    while offset<500:
-        payload=client.call('navigation','searchContent',{'query':keyword,'limit':50,'offset':offset})
-        if not isinstance(payload,dict):raise CatalogError('Nieprawidłowa odpowiedź wyszukiwarki Polsat Box Go.')
-        rows=payload.get('results',[])
-        if not isinstance(rows,list):raise CatalogError('Nieprawidłowa lista wyników Polsat Box Go.')
-        for item in parse_items(rows):
-            if item.id not in seen:seen.add(item.id);results.append(item)
-        total=payload.get('total',len(rows))
-        if type(total) is not int or total<0:raise CatalogError('Nieprawidłowa liczba wyników Polsat Box Go.')
-        offset+=len(rows)
-        if not rows or offset>=total:break
+def search(keyword, *, stop=None):
+    """Use the provider's search windows, which can contain grouped results."""
+    keyword = plain_text(keyword).strip()
+    if len(keyword) < 2:
+        raise CatalogError('Wpisz co najmniej dwa znaki.')
+    if stop is not None and stop.is_set():
+        return []
+    results, seen = [], set()
+    offset = 0
+    with catalogue_connection() as connection:
+        client = Client(connection=connection)
+        while offset < 500:
+            limit = min(50, 500 - offset)
+            payload = client.call('navigation', 'searchContent', {'query': keyword, 'limit': limit, 'offset': offset})
+            if stop is not None and stop.is_set():
+                return []
+            if not isinstance(payload, dict) or not isinstance(payload.get('results'), list):
+                raise CatalogError('Nieprawidłowa lista wyników Polsat Box Go.')
+            rows = payload['results']
+            total = payload.get('total', offset + len(rows))
+            if type(total) is not int or total < 0:
+                raise CatalogError('Nieprawidłowa liczba wyników Polsat Box Go.')
+            width = payload.get('limit', limit)
+            if type(width) is not int or not 0 < width <= limit or payload.get('offset', offset) != offset:
+                raise CatalogError('Nieprawidłowy zakres wyników Polsat Box Go.')
+            for item in parse_items(rows):
+                if item.id not in seen:
+                    seen.add(item.id)
+                    results.append(item)
+            # A single series may represent several matches in this window.
+            offset += width
+            if not rows or offset >= total:
+                break
+        client.latest()
     return results
 
 

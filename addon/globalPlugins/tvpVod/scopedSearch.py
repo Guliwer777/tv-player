@@ -104,8 +104,7 @@ def catalogue_search(folder,keyword,stop,progress):
     if folder.kind=='CANAL':raise CatalogError('Wyszukiwanie nie jest dostępne dla CANAL+.')
     if folder.kind=='POLSAT' and folder.resource=='root':
         from .polsat import search
-        if stop.is_set():return []
-        return search(keyword)
+        return search(keyword,stop=stop)
     if folder.kind=='PLAYERPL' and folder.resource=='root':
         from .playerpl import search
         if stop.is_set():return []

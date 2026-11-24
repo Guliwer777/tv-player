@@ -46,7 +46,7 @@ class ScopedTests(unittest.TestCase):
   polsat=importlib.import_module('tvpVod.polsat')
   with patch.object(polsat,'search',return_value=[wanted]) as search:
    self.assertEqual(m.catalogue_search(root,'dobry',self.stop,lambda *args:None),[wanted])
-  search.assert_called_once_with('dobry')
+  search.assert_called_once_with('dobry',stop=self.stop)
  def test_player_catalogue_search_uses_provider_search(self):
   root=Folder(0,'Player','PLAYERPL','root');wanted=self.channel(12,'Dobry film')
   player=importlib.import_module('tvpVod.playerpl')

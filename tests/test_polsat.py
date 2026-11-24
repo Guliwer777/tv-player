@@ -120,6 +120,33 @@ class PolsatTests(unittest.TestCase):
   rows=[None,{'id':'12','name':'Serial','subCategoriesLabel':'Sezony'},{'id':'15','title':'Film','mediaType':'movie'},{'id':'../bad','title':'Bad','mediaType':'movie'}]
   items=polsat.parse_items(rows);self.assertEqual(len(items),2);self.assertEqual(items[0].resource,'seasons:12')
 
+ def test_search_advances_by_provider_window_when_series_collapses_many_matches(self):
+  client=Mock()
+  series={'id':'1','name':'Serial'}
+  film={'id':'2','title':'Film','mediaType':'movie'}
+  client.call.side_effect=[
+   {'results':[series],'offset':0,'limit':50,'count':1,'total':85},
+   {'results':[series,film],'offset':50,'limit':50,'count':2,'total':85},
+  ]
+  connection=object()
+  with patch.object(polsat,'Client',return_value=client) as create, \
+       patch.object(polsat,'catalogue_connection',return_value=nullcontext(connection)):
+   self.assertEqual([item.title for item in polsat.search('film')],['Serial','Film'])
+  create.assert_called_once_with(connection=connection)
+  self.assertEqual([call.args[2]['offset'] for call in client.call.call_args_list],[0,50])
+
+ def test_search_cancelled_after_a_page_makes_no_further_requests(self):
+  client=Mock()
+  stop=threading.Event()
+  def first_page(*args):
+   stop.set()
+   return {'results':[{'id':'1','name':'Serial'}],'total':300}
+  client.call.side_effect=first_page
+  with patch.object(polsat,'Client',return_value=client), \
+       patch.object(polsat,'catalogue_connection',return_value=nullcontext(None)):
+   self.assertEqual(polsat.search('serial',stop=stop),[])
+   client.call.assert_called_once()
+
  def test_current_programmes_are_fetched_in_batch_and_added_to_labels(self):
   from datetime import datetime,timedelta,timezone
   from unittest.mock import Mock
