@@ -10,11 +10,11 @@ from datetime import datetime,timedelta,timezone
 from queue import SimpleQueue
 from urllib.parse import quote,urlsplit,urlencode,urlunsplit
 try:
-    from .catalog import CatalogError,Folder,Material,plain_text
+    from .catalog import CatalogError,Folder,Material,description_from,plain_text
     from .diagnostics import record as log_diagnostic
     from .polsat_api import Client,PolsatError,PolsatAccessDenied,authenticated,catalogue_connection
 except ImportError:
-    from catalog import CatalogError,Folder,Material,plain_text
+    from catalog import CatalogError,Folder,Material,description_from,plain_text
     from diagnostics import record as log_diagnostic
     from polsat_api import Client,PolsatError,PolsatAccessDenied,authenticated,catalogue_connection
 
@@ -69,7 +69,7 @@ def material(row,live=False):
     url=HOME+('kanaly-tv/' if live else 'wideo/film/' if row.get('mediaType')=='movie' else 'wideo/')+slug+'/'+mid+'/ogladaj'
     duration=row.get('timeShiftingDuration',0)
     if type(duration) not in (float,int):duration=0
-    description=plain_text(row.get('description',''))
+    description=description_from(row)
     if live:
         description+='\nDostęp do kanału jest sprawdzany przed odtworzeniem.'
         if duration>300:description+='\nZakres cofania w danych Polsatu: '+str(round(duration/3600,1))+' godz. Dostęp konkretnej audycji wymaga potwierdzenia.'
@@ -218,6 +218,40 @@ def _channel_catalog(client):
             return channels, offset
 
 
+def _current_programmes(client, channel_ids):
+    payload = client.call('navigation','getChannelsCurrentProgram',
+                          {'channelIds':channel_ids,'limit':2,'offset':0})
+    now = datetime.now(timezone.utc)
+    programmes = {}
+    if not isinstance(payload,dict):
+        return programmes
+    for channel_id in channel_ids:
+        rows = payload.get(channel_id)
+        if not isinstance(rows,list):
+            continue
+        for row in rows:
+            try:
+                start = datetime.fromisoformat(row['startTime'].replace('Z','+00:00'))
+                end = datetime.fromisoformat(row['endTime'].replace('Z','+00:00'))
+                if start <= now < end:
+                    programmes[channel_id] = {'start':start,'end':end,
+                        'title':plain_text(row.get('title')) or 'Audycja',
+                        'description':description_from(row),'subtitle':''}
+                    break
+            except (AttributeError,KeyError,TypeError,ValueError):
+                continue
+    return programmes
+
+
+def current_programme(item):
+    channel_id = media_id(item)
+    with catalogue_connection() as connection:
+        client = Client(connection=connection)
+        programmes = _current_programmes(client,[channel_id])
+        client.latest()
+    return programmes.get(channel_id)
+
+
 def channels(client=None):
     client=client or Client()
     key=('channels',*_profile_scope(client))
@@ -246,23 +280,15 @@ def channels(client=None):
     try:
         for offset in range(0,len(out),100):
             ids=[item.provider_id for item,genres in out[offset:offset+100]]
-            payload=client.call('navigation','getChannelsCurrentProgram',{'channelIds':ids,'limit':2,'offset':0})
-            if isinstance(payload,dict):current.update(payload)
+            current.update(_current_programmes(client,ids))
     except PolsatError:pass
-    now=datetime.now(timezone.utc)
     enriched=[]
     for item,genres in out:
-        event=None
-        for row in current.get(item.provider_id,[]):
-            try:
-                start=datetime.fromisoformat(row['startTime'].replace('Z','+00:00'));end=datetime.fromisoformat(row['endTime'].replace('Z','+00:00'))
-                if start<=now<end:event=(row,start,end);break
-            except (KeyError,TypeError,ValueError):continue
+        event=current.get(item.provider_id)
         if event:
-            row,start,end=event
+            start,end=event['start'],event['end']
             timing=start.astimezone().strftime('%H:%M')+'–'+end.astimezone().strftime('%H:%M')
-            detail=plain_text(row.get('description',''))
-            item=replace(item,description='Teraz: '+timing+': '+plain_text(row.get('title','Audycja'))+'\n'+detail+'\n'+item.description)
+            item=replace(item,description='Teraz: '+timing+': '+event['title']+'\n'+event['description']+'\n'+item.description)
         else:item=replace(item,description='Brak informacji o bieżącym programie.\n'+item.description)
         enriched.append((item,genres))
     client.latest()
@@ -348,7 +374,7 @@ def parse_items(rows):
                 out.append(material(row,row['mediaType']=='tv'))
             elif str(row.get('id','')).isdigit() and row.get('name'):
                 resource=('seasons:' if row.get('subCategoriesLabel') in ('Serie','Sezony') else 'category:')+str(row['id'])
-                out.append(Folder(identifier(resource),plain_text(row['name']),'POLSAT',resource,plain_text(row.get('description',''))))
+                out.append(Folder(identifier(resource),plain_text(row['name']),'POLSAT',resource,description_from(row)))
         except (KeyError,TypeError,ValueError):continue
     return out
 
@@ -432,7 +458,7 @@ def programmes(item,stop):
                     event_id=str(row['id'])
                     if not re.fullmatch('[A-Za-z0-9_-]{1,180}',event_id):continue
                     parsed.append({'title':plain_text(row.get('title','Audycja')),'start':start,'end':end,
-                        'description':plain_text(row.get('description','')),'subtitle':'','polsat_epg_id':event_id})
+                        'description':description_from(row),'subtitle':'','polsat_epg_id':event_id})
                 except (KeyError,ValueError,TypeError):continue
             return parsed
         for row in load('polsat',channel,day,fetch_day,stop):

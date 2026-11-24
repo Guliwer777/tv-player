@@ -178,6 +178,21 @@ class PolsatTests(unittest.TestCase):
   self.assertTrue(rows[0][0].description.startswith('Teraz: '));self.assertIn('Film teraz',rows[0][0].description)
   self.assertIn('Brak informacji',rows[1][0].description);self.assertEqual(client.call.call_count,2)
 
+ def test_search_channel_description_uses_current_programme_for_that_station(self):
+  from datetime import datetime,timedelta,timezone
+  now=datetime.now(timezone.utc)
+  channel=polsat.material({'id':'101','title':'Stacja'},True)
+  current={'startTime':(now-timedelta(minutes=30)).isoformat(),
+           'endTime':(now+timedelta(minutes=15)).isoformat(),'title':'Film','description':'<p>Opis filmu.</p>'}
+  future=dict(current,startTime=(now+timedelta(minutes=15)).isoformat(),title='Następna audycja')
+  client=Mock()
+  client.call.return_value={'101':[future,current],'102':[dict(current,title='Inna stacja')]}
+  with patch.object(polsat,'Client',return_value=client), \
+       patch.object(polsat,'catalogue_connection',return_value=nullcontext(None)):
+   event=polsat.current_programme(channel)
+  self.assertEqual((event['title'],event['description']),('Film','Opis filmu.'))
+  client.call.assert_called_once_with('navigation','getChannelsCurrentProgram',{'channelIds':['101'],'limit':2,'offset':0})
+
  def test_short_channel_page_continues_from_actual_length(self):
   items=[{'id':str(i),'title':f'Kanał {i}','genres':None} for i in range(42)]
   client=Mock();client.record=record()

@@ -1,6 +1,6 @@
 import sys,json,tempfile,threading,time,unittest
 from pathlib import Path
-from datetime import datetime,timezone
+from datetime import datetime,timedelta,timezone
 from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'addon/globalPlugins/tvpVod'))
 import playerpl as catalog
@@ -41,6 +41,18 @@ class PlayerTests(unittest.TestCase):
   now=datetime(2026,10,18,10,tzinfo=timezone.utc)
   rows=catalog.epg_rows([{'since':'2026-10-18 11:00:00','till':'2026-10-18 13:00:00','title':'Audycja','startoverAvailable':True}],now)
   self.assertEqual(len(rows),1);self.assertFalse(rows[0]['replay_available'])
+ def test_current_programme_filters_other_stations_and_uses_the_providers_lead(self):
+  now=datetime.now(timezone.utc)
+  channel=catalog.material({'id':1,'title':'Stacja','type':'LIVE','description':'<p></p>','lead':'<b>Opis stacji.</b>'})
+  event={'title':'Film','since':(now-timedelta(hours=2)).isoformat(),'till':(now+timedelta(hours=1)).isoformat(),
+         'description':'<p></p>','lead':'<p>Opis filmu.</p>','live':{'id':1}}
+  with patch.object(catalog,'api',return_value=[dict(event,live={'id':2},title='Inna stacja'),event]) as fetch:
+   result=catalog.current_programme(channel)
+  self.assertIn('Opis stacji.',channel.description)
+  self.assertEqual((result['title'],result['description']),('Film','Opis filmu.'))
+  fetch.assert_called_once()
+  self.assertEqual(fetch.call_args.kwargs['liveId[]'],'1')
+
  def test_guide_requests_at_most_24h_and_caches(self):
   item=catalog.material({'id':1,'type':'LIVE','title':'Kanał'})
   with patch.object(catalog,'api',return_value=[]) as request:

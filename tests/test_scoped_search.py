@@ -5,7 +5,7 @@ if __package__:
  from .test_commands import method
 else:
  from test_commands import method
-from datetime import datetime,timezone
+from datetime import datetime,timedelta,timezone
 package=sys.modules.setdefault('tvpVod',types.ModuleType('tvpVod'))
 package.__path__=[str(Path(__file__).resolve().parents[1]/'addon/globalPlugins/tvpVod')]
 m=importlib.import_module('tvpVod.scopedSearch')
@@ -93,6 +93,44 @@ class ScopedTests(unittest.TestCase):
       self.assertEqual(search.list.method_calls,[call.Set([material.label]),call.SetSelection(0),call.SetFocus()])
      else:
       search.list.SetFocus.assert_not_called()
+
+ def test_search_description_reads_selected_material_and_programme(self):
+  from tvpVod import liveGuide
+  clock=Mock()
+  update=method('scopedSearchDialog.py','SearchDialog','update_description',
+                {'liveGuide':liveGuide,'wx':types.SimpleNamespace(CallLater=clock),
+                 'DEFAULT':'title,time,channel','NO_DESCRIPTION':'Brak opisu.'})
+  start=datetime.now(timezone.utc)
+  for kind in ('POLSAT','PLAYERPL'):
+   with self.subTest(provider=kind):
+    search=Mock(description_timer=None,description_token=0)
+    search.owner.store.settings={}
+    film=Material(1,'Film','Opis filmu.','',kind,False)
+    search.selected.return_value={'material':film}
+    update(search)
+    search.description.ChangeValue.assert_called_once_with('Opis filmu.')
+    channel=Material(2,'Stacja','Opis stacji.','',kind+'_LIVE',False)
+    search.selected.return_value={'material':channel,'title':'Audycja',
+        'start':start,'end':start+timedelta(hours=1),'description':'<p>Opis audycji.</p>'}
+    update(search)
+    self.assertTrue(search.description.ChangeValue.call_args.args[0].endswith('Opis audycji.'))
+    clock.assert_not_called()
+    search.selected.return_value={'material':channel}
+    update(search)
+    clock.assert_called_once_with(250,search.description_loader.request,channel,3)
+    clock.reset_mock()
+
+ def test_search_renders_a_late_description_only_for_the_current_selection(self):
+  ui=types.SimpleNamespace(message=Mock())
+  complete=method('scopedSearchDialog.py','SearchDialog','complete_description',{'ui':ui})
+  search=Mock(alive=True,description_token=3)
+  search.IsActive.return_value=True
+  search.FindFocus.return_value=search.description
+  complete(search,2,'Stary opis.')
+  search.description.ChangeValue.assert_not_called()
+  complete(search,3,'Bieżący opis.')
+  search.description.ChangeValue.assert_called_once_with('Bieżący opis.')
+  ui.message.assert_called_once_with('Bieżący opis.')
 
  def test_polsat_pages_append_to_the_focused_list_and_keep_selection(self):
   ui=types.SimpleNamespace(message=Mock())

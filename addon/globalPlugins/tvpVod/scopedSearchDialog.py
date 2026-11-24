@@ -3,11 +3,13 @@ import threading
 import weakref
 import wx
 import ui
-from . import scopedSearch
+from . import liveGuide,scopedSearch
 from .planningShortcuts import mode as planning_mode,schedule as schedule_shortcut
 from .catalog import Folder
 from .canal_epg import line
 from .accessibility import route_player_shortcut
+from .descriptions import DescriptionLoader,NO_DESCRIPTION
+from .programmeFormat import DEFAULT
 
 
 class SearchDialog(wx.Dialog):
@@ -16,6 +18,7 @@ class SearchDialog(wx.Dialog):
         self.owner=owner;self.folder=folder;self.source_rows=list(rows)
         self.alive=True;self.busy=False;self.loaded=False;self.rows=[];self.visible=[]
         self.submitted_keyword=None
+        self.description=None;self.description_timer=None;self.description_loader=None;self.description_token=0
         self.stop=threading.Event();self.failed=0
         layout=wx.BoxSizer(wx.VERTICAL)
         layout.Add(wx.StaticText(self,label='Zakres: '+title+'. Wpisz tytuł programu lub nazwę kanału.'),0,wx.ALL,8)
@@ -27,6 +30,15 @@ class SearchDialog(wx.Dialog):
         layout.Add(self.status,0,wx.EXPAND|wx.ALL,8)
         self.list=wx.ListBox(self,name='Wyniki wyszukiwania');layout.Add(self.list,1,wx.EXPAND|wx.ALL,8)
         self.list.Bind(wx.EVT_CONTEXT_MENU,self.context)
+        if folder and folder.kind in ('POLSAT','PLAYERPL'):
+            layout.Add(wx.StaticText(self,label='&Opis:'),0,wx.LEFT,8)
+            self.description=wx.TextCtrl(self,style=wx.TE_MULTILINE|wx.TE_READONLY,name='Opis')
+            layout.Add(self.description,1,wx.EXPAND|wx.ALL,8)
+            order=owner.store.settings.get('programmeOrder',DEFAULT)
+            self.description_loader=DescriptionLoader(
+                lambda token,text:wx.CallAfter(self.complete_description,token,text),
+                describe=lambda item:liveGuide.current_description(item,order))
+            self.list.Bind(wx.EVT_LISTBOX,self.update_description)
         actions=wx.BoxSizer(wx.HORIZONTAL)
         for label,mode in [('Przypomnij o rozpoczęciu (Ctrl+R)','notify'),('Odtwórz automatycznie (Ctrl+Shift+R)','play')]:
             button=wx.Button(self,label=label)
@@ -146,10 +158,42 @@ class SearchDialog(wx.Dialog):
             return
         self.list.Set([label(row) for row in self.visible])
         if self.visible:self.list.SetSelection(self.visible.index(selected) if selected in self.visible else 0)
+        self.update_description()
 
     def selected(self):
         index=self.list.GetSelection()
         return self.visible[index] if 0<=index<len(self.visible) else None
+
+    def update_description(self,event=None):
+        if self.description is None:
+            return
+        if self.description_timer is not None:
+            self.description_timer.Stop()
+            self.description_timer=None
+        self.description_token+=1
+        row=self.selected()
+        if not row:
+            self.description.Clear()
+            return
+        item=row['material']
+        if 'start' in row:
+            order=self.owner.store.settings.get('programmeOrder',DEFAULT)
+            text=liveGuide.description(dict(row,detail_url=None),order)
+        elif item.kind in ('POLSAT_LIVE','PLAYERPL_LIVE') and not item.description.startswith('Teraz: '):
+            text=item.description.strip() or 'Pobieranie opisu bieżącej audycji…'
+            self.description_timer=wx.CallLater(250,self.description_loader.request,item,self.description_token)
+        else:
+            text=item.description.strip() or NO_DESCRIPTION
+        self.description.ChangeValue(text)
+        self.description.SetInsertionPoint(0)
+
+    def complete_description(self,token,text):
+        if not self.alive or token!=self.description_token:
+            return
+        self.description.ChangeValue(text)
+        self.description.SetInsertionPoint(0)
+        if self.IsActive() and self.FindFocus()==self.description:
+            ui.message(text)
 
     def schedule(self,mode):
         row=self.selected()
@@ -177,6 +221,7 @@ class SearchDialog(wx.Dialog):
         if not self.alive or row not in self.visible:
             return False
         self.list.SetSelection(self.visible.index(row))
+        self.update_description()
         self.Show()
         self.Raise()
         self.list.SetFocus()
@@ -213,7 +258,12 @@ class SearchDialog(wx.Dialog):
         finally:menu.Destroy()
 
     def destroyed(self,event):
-        if event.GetEventObject() is self:self.alive=False;self.stop.set()
+        if event.GetEventObject() is self:
+            self.alive=False;self.stop.set()
+            if self.description_timer is not None:
+                self.description_timer.Stop()
+            if self.description_loader is not None:
+                self.description_loader.close()
         event.Skip()
 
     def close(self,event):
