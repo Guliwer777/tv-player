@@ -75,9 +75,14 @@ class GuidePanel(wx.Panel):
         self.show_days()
         self.status.SetLabel(error or ('Enter na dniu: audycje. Backspace: dni. Menu audycji: przypomnienie i oglądanie.' if events else 'Dostawca nie udostępnił ramówki.'))
         current=canal_epg.current(events)
-        if current:self.describe_event(current)
-        elif events:self.describe('Brak audycji trwającej teraz. Wybierz dzień i audycję, aby przeczytać jej opis.')
-        else:self.describe(error or 'Brak ramówki i opisu bieżącej audycji u dostawcy.')
+        if current:
+            self.describe_event(current)
+            return
+        message = ('Brak audycji trwającej teraz. Wybierz dzień i audycję, aby przeczytać jej opis.'
+                   if events else error or 'Brak ramówki i opisu bieżącej audycji u dostawcy.')
+        if self.item and self.item.kind in ('POLSAT_LIVE','PLAYERPL_LIVE') and self.item.description:
+            message = self.item.description + '\n\n' + message
+        self.describe(message)
 
     def replay_manual_status(self,token):
         if self.alive and token==self.token:self.status.SetLabel('Ramówka gotowa. Menu kontekstowe: Sprawdź wcześniejsze audycje wyciszonym odtwarzaczem. Sprawdzanie nie uruchamia się automatycznie.')
@@ -172,9 +177,13 @@ class GuidePanel(wx.Panel):
 
     def describe_event(self,row):
         self.detail_token+=1;token=self.detail_token
+        order = self.owner.store.settings.get('programmeOrder','title,time,channel')
+        if row['material'].kind in ('POLSAT_LIVE','PLAYERPL_LIVE') and not row.get('detail_url'):
+            self.describe(liveGuide.description(row,order))
+            return
         self.describe(row['material'].title+'\n'+canal_epg.line(row)+'\nPobieranie opisu audycji…')
         def worker():
-            try:text=liveGuide.description(row,self.owner.store.settings.get('programmeOrder','title,time,channel'))
+            try:text=liveGuide.description(row,order)
             except Exception:text=row['title']+'\nNie udało się pobrać opisu audycji.'
             wx.CallAfter(self.complete_description,token,text)
         threading.Thread(target=worker,daemon=True).start()

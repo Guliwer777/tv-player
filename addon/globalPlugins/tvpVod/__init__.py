@@ -11,7 +11,7 @@ import inputCore
 from scriptHandler import script, getLastScriptRepeatCount
 
 from .catalog import CatalogError, Folder, Material, browse, categories, search, series_folder, following_episode
-from .descriptions import DescriptionLoader
+from .descriptions import DescriptionLoader, NO_DESCRIPTION
 from .playbackDialog import PlaybackDialog
 from .state import Store, MenuEntry, BookmarkEntry, pack_frame, unpack_frame, decode
 from .settingsDialog import SettingsDialog
@@ -49,7 +49,7 @@ class CatalogDialog(wx.Dialog):
         self.epg.Bind(wx.EVT_BUTTON,self.open_epg);self.epg.Hide()
         layout.Add(self.epg,0,wx.ALL,8)
         layout.Add(wx.StaticText(self, label="&Opis:"), 0, wx.LEFT, 8)
-        self.description = wx.TextCtrl(self, style=wx.TE_MULTILINE | wx.TE_READONLY)
+        self.description = wx.TextCtrl(self, style=wx.TE_MULTILINE | wx.TE_READONLY, name="Opis")
         layout.Add(self.description, 1, wx.EXPAND | wx.ALL, 8)
         from .guidePanel import GuidePanel
         self.guide=GuidePanel(self,self,self.description.ChangeValue);self.guide.Hide()
@@ -800,9 +800,16 @@ class CatalogDialog(wx.Dialog):
             self.access_stop=threading.Event()
             self.access_timer=wx.CallLater(500,self.check_polsat_access,item,index,self.description_token,self.access_stop)
         if item is not None:
-            self.description.ChangeValue(item.description or ('Pobieranie opisu…' if isinstance(item,Material) else ''))
+            text = item.description
+            if not text:
+                if isinstance(item,Material):
+                    text = 'Pobieranie opisu…'
+                elif isinstance(item,Folder) and item.kind in ('POLSAT','PLAYERPL'):
+                    text = NO_DESCRIPTION
+            self.description.ChangeValue(text)
             if supported(item):
-                self.description.ChangeValue('Pobieranie programu i opisu bieżącej audycji…')
+                if not item.description or item.kind not in ('POLSAT_LIVE','PLAYERPL_LIVE'):
+                    self.description.ChangeValue('Pobieranie programu i opisu bieżącej audycji…')
                 self.description_timer=wx.CallLater(350,self.guide.load,item)
             elif isinstance(item,Material):
                 self.description_timer=wx.CallLater(350,self.description_loader.request,item,self.description_token)
@@ -842,7 +849,7 @@ class CatalogDialog(wx.Dialog):
         label=LABELS.get(status,LABELS['unknown'])
         updated=replace(item,access_status=label)
         self.results[index]=updated;self.list.SetString(index,self.item_label(updated))
-        self.description.ChangeValue(label.capitalize()+'.\n'+item.description)
+        self.description.ChangeValue(label.capitalize()+'.\n'+(item.description or NO_DESCRIPTION))
         if self.FindFocus()==self.list:ui.message(label)
 
     @staticmethod

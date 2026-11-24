@@ -11,7 +11,8 @@ with patch.dict(sys.modules,{'wx':types.SimpleNamespace(Panel=object,CallAfter=l
 class GuideLoadingTests(unittest.TestCase):
  def panel(self,done):
   p=object.__new__(m.GuidePanel)
-  p.stop=threading.Event();p.token=0;p.detail_token=0;p.owner=types.SimpleNamespace(playback=None)
+  p.stop=threading.Event();p.token=0;p.detail_token=0;p.item=None
+  p.owner=types.SimpleNamespace(playback=None,store=types.SimpleNamespace(settings={}))
   p.query=Mock();p.list=Mock();p.location=Mock();p.status=Mock()
   p.complete=Mock();p.replay_status=Mock();p.replay_failed=Mock(side_effect=done.set)
   p.replay_manual_status=Mock(side_effect=lambda *args:done.set())
@@ -77,3 +78,24 @@ class GuideLoadingTests(unittest.TestCase):
   p.show_days=Mock();p.describe_event=Mock();p.describe=Mock()
   m.GuidePanel.complete(p,1,[row],'')
   self.assertIn(row['start'].date(),p.dates)
+
+ def test_inline_provider_description_is_readable_on_selection_without_loading_message(self):
+  from datetime import datetime,timedelta,timezone
+  start=datetime.now(timezone.utc)
+  for kind in ('POLSAT_LIVE','PLAYERPL_LIVE'):
+   with self.subTest(provider=kind):
+    p=self.panel(threading.Event())
+    p.describe=Mock()
+    item=m.liveGuide.Material(1,'Stacja','','',kind,False)
+    p.describe_event({'title':'Film','start':start,'end':start+timedelta(hours=1),
+                      'material':item,'description':'<p>Opis filmu.</p>','subtitle':''})
+    p.describe.assert_called_once()
+    self.assertTrue(p.describe.call_args.args[0].endswith('Opis filmu.'))
+
+ def test_provider_channel_description_remains_available_if_guide_fails(self):
+  for kind in ('POLSAT_LIVE','PLAYERPL_LIVE'):
+   with self.subTest(provider=kind):
+    p=self.panel(threading.Event());p.alive=True;p.token=1;p.describe=Mock()
+    p.item=m.liveGuide.Material(1,'Stacja','Opis kanału.','',kind,False)
+    m.GuidePanel.complete(p,1,[],'Błąd pobierania ramówki.')
+    p.describe.assert_called_once_with('Opis kanału.\n\nBłąd pobierania ramówki.')
