@@ -78,6 +78,14 @@ class PersistenceTests(unittest.TestCase):
             store.configure({'quality':'invalid'})
             self.assertEqual(state.Store(path).settings['quality'],'auto')
 
+    def test_volume_allows_boost_up_to_200_percent(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/'state.json';store=state.Store(path)
+            store.configure({'volume':200})
+            self.assertEqual(state.Store(path).settings['volume'],200)
+            store.configure({'volume':201})
+            self.assertEqual(state.Store(path).settings['volume'],200)
+
     def test_last_session_survives_restart_bookmark_and_settings_writes(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "state.json"

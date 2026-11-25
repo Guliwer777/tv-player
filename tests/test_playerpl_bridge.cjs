@@ -27,4 +27,31 @@ function startup(privacy){
  assert.equal(clicks,privacy?0:1);
  if(privacy)assert(packets.some(p=>p.message?.includes('prywatności')));
 }
-(async()=>{await run();await run(true);startup(false);startup(true);console.log('PASS: Player controls, live/VOD clocks, bounded seek, startup Watch, no automatic privacy/purchase actions');})().catch(e=>{console.error(e);process.exitCode=1});
+function loginWall(){
+ const packets=[],timers=[],events={},session=new Map(),saved=new Map();
+ const storage=m=>({getItem:k=>m.get(k),setItem:(k,v)=>m.set(k,v),removeItem:k=>m.delete(k)});
+ const login={innerText:'Zaloguj się, by oglądać bez opłat',getBoundingClientRect:()=>({width:300}),click(){throw Error('Automatic sign-in');}};
+ let video;
+ const context={location:{origin:'https://player.pl',pathname:'/live'},sessionStorage:storage(session),localStorage:storage(saved),
+   window:{tvp_bridge:{postMessage:s=>packets.push(JSON.parse(s))},addEventListener:(n,f)=>events[n]=f},
+   document:{querySelectorAll:s=>s==='video'?(video?[video]:[]):[login],querySelector:()=>null,addEventListener:(n,f)=>events[n]=f},
+   setInterval:f=>timers.push(f),setTimeout(){},Date,Number,Math,Array,JSON,Error};
+ const load=()=>vm.runInNewContext(code.replace('__SETTINGS__',JSON.stringify({path:'/live',quality:'auto'})),context);
+ load();timers[0]();timers[0]();
+ assert.equal(packets.filter(p=>p.message?.includes('wymaga zalogowania')).length,1);
+ assert.equal(session.size,0);
+ events.click({target:{closest:()=>login}});
+ assert.equal(session.get('tvPlayer.signingIn'),'1');
+ load();timers[1]();
+ assert.equal(saved.size,0);
+ video={readyState:3,paused:false,duration:40,currentTime:1,getBoundingClientRect:()=>({width:500})};
+ timers[1]();
+ assert.equal(saved.get('tvPlayer.signedInOnSite'),'1');
+ assert.equal(session.size,0);
+ const back={key:'Backspace',preventDefault(){},stopImmediatePropagation(){}};
+ events.keydown({...back,target:{closest:()=>true}});
+ assert(!packets.some(p=>p.action==='catalog-back'));
+ events.keydown(back);
+ assert.equal(packets.at(-1).action,'catalog-back');
+}
+(async()=>{await run();await run(true);startup(false);startup(true);loginWall();console.log('PASS: Player controls, live/VOD clocks, website login, startup Watch, no automatic privacy/purchase actions');})().catch(e=>{console.error(e);process.exitCode=1});

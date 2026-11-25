@@ -4,7 +4,9 @@ import os
 from pathlib import Path
 import threading
 import math
+import re
 import uuid
+from urllib.parse import quote
 try:
     from .tvp_account import protect,AccountError
 except ImportError:
@@ -56,10 +58,28 @@ def load(path=None):
 
 def bootstrap(record):
     validate(record)
-    cookies=dict(record.get('cookies',{}))
-    cookies.update(uid=record['uid'],subscriber_hash=record['user_hash'],subscriber_pub=record['user_pub'])
-    if record.get('profile'):cookies.update(profile_uid=record['profile']['id'],samuid=record['profile']['id'])
+    # Set-Cookie already contains wire-format values (including any percent escapes).
+    # Only our own fallback identifiers need encoding before writing document.cookie.
+    cookie_octets = r'[\x21\x23-\x2b\x2d-\x3a\x3c-\x5b\x5d-\x7e]*'
+    cookies = {name: value for name, value in record.get('cookies', {}).items()
+               if re.fullmatch(cookie_octets, value) or re.fullmatch('"' + cookie_octets + '"', value)}
+    fallbacks = []
+    for name, field in (('uid', 'uid'), ('subscriber_hash', 'user_hash'), ('subscriber_pub', 'user_pub')):
+        if not cookies.get(name):
+            cookies[name] = quote(record[field], safe='')
+            fallbacks.append(name)
+    if record.get('profile'):
+        profile_id = quote(record['profile']['id'], safe='')
+        cookies.update(profile_uid=profile_id, samuid=profile_id)
     return """(()=>{if(location.origin!=='https://player.pl')return;
-for(const [key,value] of Object.entries(%s))document.cookie=key+'='+encodeURIComponent(value)+'; Path=/; Secure; SameSite=Lax';
+// Let Player manage the web session after sign-in in this account's WebView.
+try {
+    if(sessionStorage.getItem('tvPlayer.signingIn') || localStorage.getItem('tvPlayer.signedInOnSite'))return;
+} catch (_) {}
+const existing=document.cookie.split(';').map(part=>part.trim()),fallbacks=%s;
+for(const [key,value] of Object.entries(%s)){
+    if(fallbacks.includes(key)&&existing.some(part=>part.startsWith(key+'=')&&part.length>key.length+1))continue;
+    document.cookie=key+'='+value+'; Path=/; Secure; SameSite=Lax';
+}
 window.__tvpPlayerProfile=%s;
-})();"""%(json.dumps(cookies,ensure_ascii=True),json.dumps(record.get('profile'),ensure_ascii=True))
+})();"""%(json.dumps(fallbacks),json.dumps(cookies,ensure_ascii=True),json.dumps(record.get('profile'),ensure_ascii=True))

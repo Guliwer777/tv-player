@@ -3,6 +3,7 @@
 (() => {
   if (location.origin !== 'https://vod.tvp.pl') return;
   const send = value => window.tvp_bridge.postMessage(JSON.stringify(value));
+  const audio = window.__tvpAudioGain || {set:(video,value)=>video.volume=Math.max(0,Math.min(1,Number(value)/100)),get:video=>video.volume*100};
   const settings = __SETTINGS__;
   const isMaterial = () => location.pathname === settings.path || location.pathname.startsWith(settings.path+'/');
   const actionForKey = event => {
@@ -58,7 +59,7 @@
       case 'time-pos': return finite(video.currentTime);
       case 'duration': return finite(video.duration);
       case 'pause': return typeof tvpStore()?.playerInstance?.isPaused==='function' ? tvpStore().playerInstance.isPaused() : video.paused;
-      case 'volume': return video.volume*100;
+      case 'volume': return audio.get(video);
       case 'track-list': return tracks(video);
       case 'aid': return tracks(video).find(t=>t.selected)?.id || null;
     }
@@ -75,7 +76,7 @@
       else video.play().catch(()=>send({event:'player-error',message:'TVP wymaga uruchomienia filmu na stronie odtwarzacza.'}));
     } else if (name === 'volume') {
       if(typeof player?.setVolume==='function') player.setVolume(Math.max(0,Math.min(100,Number(data))));
-      else video.volume=Math.max(0,Math.min(1,Number(data)/100));
+      audio.set(video,data);
     }
     else if (name === 'aid') {
       if(store && typeof player?.switchAudioTrack==='function' && store.audioTracks?.[Number(data)-1]) {
@@ -139,6 +140,7 @@
       qualitySince=Date.now();
       send({event:'file-loaded'});
       change('volume',settings.volume);
+      if(!settings.pause && property('pause')) change('pause',false);
     }
     if (!restored && video.seekable.length) {
       restored=true;

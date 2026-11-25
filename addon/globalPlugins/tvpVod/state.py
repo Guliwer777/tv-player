@@ -95,7 +95,7 @@ class Store:
             if self.settings["afterEnd"] not in ("stop", "next"):
                 self.settings["afterEnd"] = "stop"
             volume = self.settings["volume"]
-            self.settings["volume"] = max(0, min(100, volume)) if type(volume) is int else 70
+            self.settings["volume"] = max(0, min(200, volume)) if type(volume) is int else 70
             self.settings["resumePaused"] = self.settings["resumePaused"] is True
             if self.settings["quality"] not in dict(QUALITY_CHOICES):
                 self.settings["quality"] = "auto"

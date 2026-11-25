@@ -6,12 +6,13 @@ from pathlib import Path
 import queue
 import subprocess
 import threading
+from urllib.parse import urlsplit
 
 from .catalog import CatalogError
 
 
 class WebPlayer:
-    def __init__(self, hwnd, on_event, source, *, start=0, volume=70, paused=False, quality="auto", direct=False, canal_start=None, canal_probe=False):
+    def __init__(self, hwnd, on_event, source, *, start=0, volume=70, paused=False, quality="auto", direct=False, canal_start=None, canal_probe=False, polsat_retry=False):
         executable=Path(__file__).parent/'bin/tvpWebPlayer.exe'
         if not executable.is_file():
             raise CatalogError('Brak pomocniczego odtwarzacza. Zainstaluj pełny pakiet dodatku.')
@@ -34,7 +35,15 @@ class WebPlayer:
             profile=Path(os.environ['LOCALAPPDATA'])/'tvpVod-webview'
         account_root=profile.parent
         if canal:profile=profile.parent/'tvpPlayer-canal-webview'
-        if polsat:profile=profile.parent/'tvpPlayer-polsat-webview'
+        if polsat:
+            folder='tvpPlayer-polsat-live-webview' if source.video_type=='LIVE' else 'tvpPlayer-polsat-webview'
+            profile=account_root/folder
+        tvp_vod=direct and urlsplit(source.url).hostname=='vod.tvp.pl'
+        if tvp_vod or playerpl or polsat:
+            key='WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS'
+            arguments=env.get(key,'')
+            if '--autoplay-policy=' not in arguments:
+                env[key]=(arguments+' --autoplay-policy=no-user-gesture-required').strip()
         if playerpl:
             from .playerpl_api import current_record,PlayerError
             from .playerpl_account import AccountError
@@ -64,6 +73,7 @@ class WebPlayer:
             args.append('--playerpl')
         elif polsat:
             args.append('--polsat')
+            if polsat_retry:args.append('--polsat-retry')
         elif canal:
             args.append('--canal')
             if canal_probe:args.append('--canal-probe')
@@ -130,7 +140,7 @@ class WebPlayer:
         if event=='property-change':
             name,value=packet.get('name'),packet.get('data')
             if name in ('time-pos','duration','volume'):
-                return type(value) in (int,float) and math.isfinite(value) and value>=0 and (name!='volume' or value<=100)
+                return type(value) in (int,float) and math.isfinite(value) and value>=0 and (name!='volume' or value<=200)
             if name in ('pause','eof-reached'):
                 return type(value) is bool
             if name=='track-list':

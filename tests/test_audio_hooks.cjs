@@ -6,6 +6,18 @@ class Player{constructor(value){assert.equal(value,'unchanged');this.onPlaybackO
 polsat.window.CyfrowyPlayer={Player};const p=new polsat.window.CyfrowyPlayer.Player('unchanged');
 assert.equal(polsat.window.__tvpPolsatSDK,p);listener({audio:[{label:'polski (audiodeskrypcja)',value:{active:true}}]});assert.equal(polsat.window.__tvpPolsatAudio.length,1);
 assert(p instanceof Player);
+const alerts=[];const alerted={location:{origin:'https://polsatboxgo.pl'},window:{alert(){},tvp_bridge:{postMessage:p=>alerts.push(JSON.parse(p))}}};
+vm.runInNewContext(source,alerted);alerted.window.alert('Brak aktywnego profilu');alerted.window.alert('Brak aktywnego profilu');
+assert.deepEqual(alerts,[{event:'player-error',message:'Polsat Box Go: Brak aktywnego profilu'}]);
+const blankAlerts=[];const blankAlerted={location:{origin:'https://polsatboxgo.pl'},window:{alert(){},tvp_bridge:{postMessage:p=>blankAlerts.push(JSON.parse(p))}}};
+vm.runInNewContext(source,blankAlerted);blankAlerted.window.alert('');
+assert.deepEqual(blankAlerts,[{event:'player-error',message:'Polsat Box Go: strona wyświetliła pusty komunikat podczas uruchamiania.'}]);
+const pageErrors=[];const faultListeners={};const faulty={location:{origin:'https://polsatboxgo.pl'},window:{addEventListener:(name,fn)=>faultListeners[name]=fn,tvp_bridge:{postMessage:p=>pageErrors.push(JSON.parse(p))}}};
+vm.runInNewContext(source,faulty);faultListeners.error({message:'Uncaught TypeError: nie można odczytać playera'});
+assert.deepEqual(pageErrors,[{event:'player-error',message:'Polsat Box Go: Uncaught TypeError: nie można odczytać playera'}]);
+const opaqueErrors=[];const opaqueListeners={};const opaque={location:{origin:'https://polsatboxgo.pl'},window:{addEventListener:(name,fn)=>opaqueListeners[name]=fn,tvp_bridge:{postMessage:p=>opaqueErrors.push(JSON.parse(p))}}};
+vm.runInNewContext(source,opaque);opaqueListeners.error({message:'Script error.'});
+assert.deepEqual(opaqueErrors,[]);
 const player={location:{origin:'https://player.pl'},window:{}};vm.runInNewContext(source,player);
 const native={getAudioTracks:()=>[]},namespace={};Object.defineProperty(namespace,'init',{enumerable:true,get:()=>()=>native});player.window.nuvi=namespace;
 assert.equal(player.window.nuvi.init(),native);assert.equal(player.window.__tvpPlayerSDK,native);

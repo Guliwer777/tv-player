@@ -2,6 +2,37 @@
 (() => {
   const polsat=location.origin==='https://polsatboxgo.pl',player=location.origin==='https://player.pl';
   if(!polsat&&!player)return;
+  if(polsat){
+    let lastFault='';
+    const reportFault=value=>{
+      // Page failures occasionally carry a signed address.  Report only a
+      // short human-readable message, never an address, cookies or tokens.
+      const text=String(value||'').replace(/https?:\/\/\S+/gi,'[adres ukryty]').replace(/\s+/g,' ').trim().slice(0,500);
+      if(!text||text===lastFault)return;
+      lastFault=text;
+      window.tvp_bridge?.postMessage(JSON.stringify({event:'player-error',message:'Polsat Box Go: '+text}));
+    };
+    window.addEventListener?.('error',event=>{
+      // A cross-origin script exposes only this opaque browser message.  The
+      // official player can continue normally, so it is not useful to NVDA.
+      const message=String(event?.message||'').trim();
+      if(/^script error\.?$/i.test(message))return;
+      if(!message&&location.pathname?.startsWith('/kanaly-tv/')&&event?.target?.tagName){
+        const tag=String(event.target.tagName).toUpperCase();
+        const kind=['SCRIPT','LINK','IMG','VIDEO','SOURCE','IFRAME'].includes(tag)?tag:'inny';
+        window.tvp_bridge?.postMessage(JSON.stringify({event:'player-diagnostic',message:'Polsat LIVE: błąd ładowania elementu '+kind+'.'}));
+        return;
+      }
+      reportFault(message||'strona zgłosiła nieokreślony błąd podczas uruchamiania.');
+    },true);
+    window.addEventListener?.('unhandledrejection',event=>reportFault(event?.reason?.message||event?.reason||'strona odrzuciła żądanie podczas uruchamiania.'),true);
+    if(typeof window.alert==='function'){
+    window.alert=message=>{
+      const text=String(message||'').replace(/\s+/g,' ').trim().slice(0,800);
+      reportFault(text||'strona wyświetliła pusty komunikat podczas uruchamiania.');
+    };
+    }
+  }
   const key=polsat?'CyfrowyPlayer':'nuvi',member=polsat?'Player':'init';
   const namespaces=new WeakMap(),functions=new WeakMap();
   function capture(instance){
