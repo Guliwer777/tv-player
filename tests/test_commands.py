@@ -1,5 +1,6 @@
 import ast
 import importlib.util
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
@@ -275,6 +276,32 @@ class BackgroundTests(unittest.TestCase):
                                 ShiftDown=lambda: False, AltDown=lambda: False)
         handler(dialog, event)
         self.assertEqual(calls, ["pause"])
+
+    def test_polsat_live_refresh_updates_spoken_count_and_parent(self):
+        def folder(count):
+            return SimpleNamespace(kind="POLSAT", resource="live:all", label=f"Dostępne na koncie ({count})")
+
+        spoken = []
+        displayed = []
+        namespace = {"__package__": "catalog_test", "ui": SimpleNamespace(message=spoken.append),
+                     "MenuEntry": lambda label, action: label}
+        complete = method("__init__.py", "CatalogDialog", "complete", namespace)
+        old = folder(35)
+        parent = [old]
+        dialog = SimpleNamespace(alive=True, generation=1, current_folder=old, heading=old.label,
+                                 history=[(parent, None, 0, "Telewizja na żywo", 0)], set_items=displayed.append)
+        provider = SimpleNamespace(all_channels_folder=folder)
+        with patch.dict(sys.modules, {"catalog_test.polsat": provider}):
+            complete(dialog, 1, list(range(42)), "")
+            self.assertEqual(spoken[-1], folder(42).label)
+            self.assertEqual(dialog.heading, parent[0].label)
+            complete(dialog, 1, [], "Nie udało się pobrać listy.")
+            self.assertEqual(spoken[-1], "Nie udało się pobrać listy.")
+            self.assertEqual(parent[0].label, folder(42).label)
+            complete(dialog, 1, [], "")
+            self.assertEqual(displayed[-1], ["Wstecz"])
+            self.assertEqual(spoken[-1], folder(0).label)
+            self.assertEqual(parent[0].label, folder(0).label)
 
     def test_back_and_escape_preserve_playback(self):
         calls = []

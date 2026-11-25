@@ -3,17 +3,27 @@ import hashlib
 import re
 import threading
 import time
+from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import ExitStack
 from datetime import datetime,timedelta,timezone
+from queue import SimpleQueue
 from urllib.parse import quote,urlsplit,urlencode,urlunsplit
 try:
-    from .catalog import CatalogError,Folder,Material,plain_text
-    from .polsat_api import Client,PolsatError,PolsatAccessDenied,authenticated
+    from .catalog import CatalogError,Folder,Material,description_from,plain_text
+    from .diagnostics import record as log_diagnostic
+    from .polsat_api import Client,PolsatError,PolsatAccessDenied,authenticated,catalogue_connection
 except ImportError:
-    from catalog import CatalogError,Folder,Material,plain_text
-    from polsat_api import Client,PolsatError,PolsatAccessDenied,authenticated
+    from catalog import CatalogError,Folder,Material,description_from,plain_text
+    from diagnostics import record as log_diagnostic
+    from polsat_api import Client,PolsatError,PolsatAccessDenied,authenticated,catalogue_connection
 
 HOME='https://polsatboxgo.pl/'
+CATALOGUE_TTL=120
+CATALOGUE_CACHE_SIZE=64
 _cache={}
+_folder_cache=OrderedDict()
+_cache_generation=0
 _lock=threading.Lock()
 
 
@@ -28,11 +38,21 @@ def official_url(url):
 
 
 def clear_cache():
-    with _lock:_cache.clear()
+    global _cache_generation
+    with _lock:
+        _cache.clear()
+        _folder_cache.clear()
+        _cache_generation+=1
     try:
         from .polsat_access import clear
         clear()
     except ImportError:pass
+
+
+def _profile_scope(client):
+    if not client.record.get('profile'):
+        client.ensure_profile()
+    return client.record['clientId'],client.record['profile']['id']
 
 
 def media_id(material):
@@ -49,7 +69,7 @@ def material(row,live=False):
     url=HOME+('kanaly-tv/' if live else 'wideo/film/' if row.get('mediaType')=='movie' else 'wideo/')+slug+'/'+mid+'/ogladaj'
     duration=row.get('timeShiftingDuration',0)
     if type(duration) not in (float,int):duration=0
-    description=plain_text(row.get('description',''))
+    description=description_from(row)
     if live:
         description+='\nDostęp do kanału jest sprawdzany przed odtworzeniem.'
         if duration>300:description+='\nZakres cofania w danych Polsatu: '+str(round(duration/3600,1))+' godz. Dostęp konkretnej audycji wymaga potwierdzenia.'
@@ -66,22 +86,37 @@ def material(row,live=False):
 
 def accessible_channels(rows,client):
     """Only include explicit server grants; cache scoped to account and profile."""
-    from concurrent.futures import ThreadPoolExecutor
     record=client.record
     scope=(record['clientId'],record['profile']['id'])
+    connections=SimpleQueue()
+    with _lock:generation=_cache_generation
+
     def allowed(pair):
         item,genres=pair;key=('access',*scope,item.provider_id)
         with _lock:cached=_cache.get(key)
         if cached and time.monotonic()-cached[0]<300:return cached[1]
-        response=authenticated(record,'drm','checkProductAccess',{'product':{'id':item.provider_id,'subType':'tv','type':'media'}})
+        connection=connections.get()
+        try:
+            response=authenticated(record,'drm','checkProductAccess',
+                                   {'product':{'id':item.provider_id,'subType':'tv','type':'media'}},
+                                   connection=connection)
+        finally:
+            connections.put(connection)
         status=response.get('statusDescription') if isinstance(response,dict) else None
         if status not in ('has access','access granted','access','no access'):
             raise PolsatError('Nie udało się jednoznacznie sprawdzić dostępności kanałów Polsat Box Go. Odśwież listę.')
         grant=status!='no access'
-        with _lock:_cache[key]=(time.monotonic(),grant)
+        with _lock:
+            if generation==_cache_generation:
+                _cache[key]=(time.monotonic(),grant)
         return grant
-    # No stream or licence is opened. Keep RPC concurrency bounded.
-    with ThreadPoolExecutor(max_workers=4) as pool:grants=list(pool.map(allowed,rows))
+    # Lease each connection to one access check at a time and close it after all workers finish.
+    workers=4
+    with ExitStack() as stack:
+        for _ in range(workers):
+            connections.put(stack.enter_context(catalogue_connection()))
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            grants=list(pool.map(allowed,rows))
     client.latest()  # Never publish results for an account/profile changed meanwhile.
     return [pair for pair,grant in zip(rows,grants) if grant]
 
@@ -90,10 +125,6 @@ def timeline_origin(item):
     """Read DASH clock metadata only. No media segment or DRM licence requests."""
     from urllib.request import Request,build_opener,HTTPRedirectHandler
     from xml.etree import ElementTree
-    try:
-        from .polsat_api import NoRedirect
-    except ImportError:
-        from polsat_api import NoRedirect
     class TimelineRedirect(HTTPRedirectHandler):
         def redirect_request(self,req,fp,code,msg,headers,newurl):
             p=urlsplit(newurl)
@@ -138,89 +169,200 @@ def replay_url(item,event):
     return item.url.split('?',1)[0]+'?'+urlencode({'epgId':identifier,'startTime':int(event['start'].timestamp()*1000),'tvpStartOver':int(event['start'].timestamp())})
 
 
+class IncompleteChannelList(PolsatError):
+    pass
+
+
+def _channel_catalog(client):
+    limit = 200
+    offset = 0
+    total = None
+    seen = set()
+    channels = []
+    while True:
+        page = client.call('navigation', 'getTvChannels', {'filters': [], 'limit': limit, 'offset': offset})
+        rows = page.get('results') if isinstance(page, dict) else None
+        if not isinstance(rows, list) or len(rows) > limit:
+            raise IncompleteChannelList('Nieprawidłowa strona listy kanałów.')
+        if page.get('offset', offset) != offset or page.get('count', len(rows)) != len(rows):
+            raise IncompleteChannelList(f'Niespójna strona listy kanałów od pozycji {offset}.')
+        if 'total' in page:
+            reported = page['total']
+            if type(reported) is not int or reported < 0 or (total is not None and reported != total):
+                raise IncompleteChannelList('Niespójna liczba kanałów w katalogu.')
+            total = reported
+        end = offset + len(rows)
+        if end > 2000 or (total is not None and (end > total or total > 2000)):
+            raise IncompleteChannelList('Liczba pozycji wykracza poza zakres pobieranej listy kanałów.')
+        if not rows and total is not None and end < total:
+            raise IncompleteChannelList(f'Pobrano tylko {end} z {total} pozycji katalogu.')
+
+        page_ids = set()
+        for row in rows:
+            try:
+                if not isinstance(row, dict) or type(row.get('id')) not in (str, int):
+                    raise ValueError()
+                item = material(row, True)
+            except (KeyError, TypeError, ValueError, AttributeError):
+                raise IncompleteChannelList('Brakuje prawidłowych danych stacji w katalogu.') from None
+            if item.provider_id in seen:
+                raise IncompleteChannelList(f'Strona od pozycji {offset} powtarza kanały z poprzedniej strony.')
+            if item.provider_id in page_ids:
+                continue
+            page_ids.add(item.provider_id)
+            genres = row.get('genres')
+            channels.append((item, [g for g in genres if isinstance(g, str)] if isinstance(genres, list) else []))
+        seen.update(page_ids)
+        offset = end
+        if offset == total or not rows:
+            return channels, offset
+
+
+def _current_programmes(client, channel_ids):
+    payload = client.call('navigation','getChannelsCurrentProgram',
+                          {'channelIds':channel_ids,'limit':2,'offset':0})
+    now = datetime.now(timezone.utc)
+    programmes = {}
+    if not isinstance(payload,dict):
+        return programmes
+    for channel_id in channel_ids:
+        rows = payload.get(channel_id)
+        if not isinstance(rows,list):
+            continue
+        for row in rows:
+            try:
+                start = datetime.fromisoformat(row['startTime'].replace('Z','+00:00'))
+                end = datetime.fromisoformat(row['endTime'].replace('Z','+00:00'))
+                if start <= now < end:
+                    programmes[channel_id] = {'start':start,'end':end,
+                        'title':plain_text(row.get('title')) or 'Audycja',
+                        'description':description_from(row),'subtitle':''}
+                    break
+            except (AttributeError,KeyError,TypeError,ValueError):
+                continue
+    return programmes
+
+
+def current_programme(item):
+    channel_id = media_id(item)
+    with catalogue_connection() as connection:
+        client = Client(connection=connection)
+        programmes = _current_programmes(client,[channel_id])
+        client.latest()
+    return programmes.get(channel_id)
+
+
 def channels(client=None):
-    client=client or Client();client.ensure_profile()
-    key=('channels',client.record['clientId'],client.record['profile']['id'])
-    with _lock:cached=_cache.get(key)
-    if cached and time.monotonic()-cached[0]<120:return cached[1]
-    records=[];offset=0
-    while offset<2000:
-        result=client.call('navigation','getTvChannels',{'filters':[],'limit':200,'offset':offset})
-        rows=result.get('results',[]) if isinstance(result,dict) else []
-        if not isinstance(rows,list):raise PolsatError('Nieprawidłowa lista kanałów Polsat Box Go.')
-        records.extend(rows)
-        if len(rows)<200:break
-        offset+=200
-    seen=set();out=[]
-    for row in records:
+    client=client or Client()
+    key=('channels',*_profile_scope(client))
+    with _lock:
+        generation=_cache_generation
+        cached=_cache.get(key)
+    if cached and time.monotonic()-cached[0]<CATALOGUE_TTL:
+        client.latest()
+        return cached[1]
+    client.ensure_profile()
+    try:
+        candidates, count = _channel_catalog(client)
+    except IncompleteChannelList as first_error:
+        log_diagnostic('Polsat Box Go — kanały', f'Ponowne pobieranie. {first_error}')
         try:
-            item=material(row,True)
-            if item.id in seen:continue
-            seen.add(item.id);genres=[str(g) for g in row.get('genres',[]) if isinstance(g,str)]
-            out.append((item,genres))
-        except (KeyError,TypeError,ValueError):continue
-    out=accessible_channels(out,client)
+            candidates, count = _channel_catalog(client)
+        except IncompleteChannelList as error:
+            raise PolsatError(f'Polsat Box Go zwrócił niepełną listę kanałów. {error} Naciśnij F5, aby odświeżyć.') from None
+    out=accessible_channels(candidates,client)
+    log_diagnostic('Polsat Box Go — kanały',
+                   f'Pozycje katalogu: {count}. Różne kanały: {len(candidates)}. '
+                   f'Dostępne na profilu: {len(out)}. Bez dostępu: {len(candidates) - len(out)}.')
     # Fetch current programmes in batches, not one request per station.
     from dataclasses import replace
     current={}
     try:
         for offset in range(0,len(out),100):
             ids=[item.provider_id for item,genres in out[offset:offset+100]]
-            payload=client.call('navigation','getChannelsCurrentProgram',{'channelIds':ids,'limit':2,'offset':0})
-            if isinstance(payload,dict):current.update(payload)
+            current.update(_current_programmes(client,ids))
     except PolsatError:pass
-    now=datetime.now(timezone.utc)
     enriched=[]
     for item,genres in out:
-        event=None
-        for row in current.get(item.provider_id,[]):
-            try:
-                start=datetime.fromisoformat(row['startTime'].replace('Z','+00:00'));end=datetime.fromisoformat(row['endTime'].replace('Z','+00:00'))
-                if start<=now<end:event=(row,start,end);break
-            except (KeyError,TypeError,ValueError):continue
+        event=current.get(item.provider_id)
         if event:
-            row,start,end=event
+            start,end=event['start'],event['end']
             timing=start.astimezone().strftime('%H:%M')+'–'+end.astimezone().strftime('%H:%M')
-            detail=plain_text(row.get('description',''))
-            item=replace(item,description='Teraz: '+timing+': '+plain_text(row.get('title','Audycja'))+'\n'+detail+'\n'+item.description)
+            item=replace(item,description='Teraz: '+timing+': '+event['title']+'\n'+event['description']+'\n'+item.description)
         else:item=replace(item,description='Brak informacji o bieżącym programie.\n'+item.description)
         enriched.append((item,genres))
-    with _lock:_cache[key]=(time.monotonic(),enriched)
+    client.latest()
+    with _lock:
+        if generation==_cache_generation:
+            _cache[key]=(time.monotonic(),enriched)
     return enriched
+
+
+def all_channels_folder(count):
+    return Folder(identifier('live:all'), f'Dostępne na koncie ({count})', 'POLSAT', 'live:all')
 
 
 def browse(folder,offset=0):
     try:
         client=Client()
-        if folder.resource=='root':
-            result=client.call('navigation','getHomeMenu')
-            out=[]
-            for row in result if isinstance(result,list) else []:
-                place=row.get('place',{})
-                if place.get('type')=='category' and str(place.get('value','')).isdigit():
-                    out.append(Folder(identifier('category:'+str(place['value'])),plain_text(row.get('name','Kategoria')),'POLSAT','category:'+str(place['value'])))
-            return out,False
-        if folder.resource=='live' or folder.resource.startswith('live:'):
-            rows=channels(client)
-            if folder.resource=='live':
-                genres=sorted({g for item,gs in rows for g in gs})
-                return [Folder(identifier('live:all'),'Dostępne na koncie ('+str(len(rows))+')','POLSAT','live:all')]+[
-                    Folder(identifier('live:'+g),g,'POLSAT','live:'+g) for g in genres],False
-            group=folder.resource[5:]
-            return [item for item,gs in rows if group=='all' or group in gs],False
-        if folder.resource.startswith(('category:','seasons:')):
-            category=folder.resource.split(':',1)[1]
-            if not category.isdigit():raise PolsatError('Niepoprawna kategoria Polsat Box Go.')
-            if folder.resource.startswith('seasons:'):
-                result=client.call('navigation','getSubCategories',{'catid':int(category)})
-                rows=result if isinstance(result,list) else result.get('results',[]) if isinstance(result,dict) else []
-                return parse_items(rows),False
-            result=client.call('navigation','getCategoryContentWithFlatNavigation',{'catid':int(category),'limit':50,'offset':offset,
-                'collection':{'default':True,'name':'Alfabetycznie','type':'sortedby','value':'13'}})
-            rows=result.get('results',[]) if isinstance(result,dict) else []
-            return parse_items(rows),offset+50<result.get('total',len(rows))
-        raise PolsatError('Nieznany katalog Polsat Box Go.')
+        key=(*_profile_scope(client),folder.resource,offset)
+        live=folder.resource=='live' or folder.resource.startswith('live:')
+        with _lock:
+            generation=_cache_generation
+            cached=_folder_cache.get(key)
+            if cached and time.monotonic()-cached[0]<CATALOGUE_TTL:
+                _folder_cache.move_to_end(key)
+            else:
+                cached=None
+        if cached:
+            client.latest()
+            return list(cached[1]),cached[2]
+
+        with catalogue_connection() as connection:
+            client.connection=connection
+            rows,more=_browse(client,folder,offset)
+        if rows and not live:
+            client.latest()
+            with _lock:
+                # A request already in progress must not undo an F5 refresh.
+                if generation==_cache_generation:
+                    _folder_cache[key]=(time.monotonic(),tuple(rows),more)
+                    _folder_cache.move_to_end(key)
+                    if len(_folder_cache)>CATALOGUE_CACHE_SIZE:
+                        _folder_cache.popitem(last=False)
+        return rows,more
     except PolsatError as exc:raise CatalogError(str(exc)) from None
+
+
+def _browse(client,folder,offset):
+    if folder.resource=='root':
+        result=client.call('navigation','getHomeMenu')
+        out=[]
+        for row in result if isinstance(result,list) else []:
+            place=row.get('place',{})
+            if place.get('type')=='category' and str(place.get('value','')).isdigit():
+                out.append(Folder(identifier('category:'+str(place['value'])),plain_text(row.get('name','Kategoria')),'POLSAT','category:'+str(place['value'])))
+        return out,False
+    if folder.resource=='live' or folder.resource.startswith('live:'):
+        rows=channels(client)
+        if folder.resource=='live':
+            genres=sorted({g for item,gs in rows for g in gs})
+            return [all_channels_folder(len(rows))]+[
+                Folder(identifier('live:'+g),g,'POLSAT','live:'+g) for g in genres],False
+        group=folder.resource[5:]
+        return [item for item,gs in rows if group=='all' or group in gs],False
+    if folder.resource.startswith(('category:','seasons:')):
+        category=folder.resource.split(':',1)[1]
+        if not category.isdigit():raise PolsatError('Niepoprawna kategoria Polsat Box Go.')
+        if folder.resource.startswith('seasons:'):
+            result=client.call('navigation','getSubCategories',{'catid':int(category)})
+            rows=result if isinstance(result,list) else result.get('results',[]) if isinstance(result,dict) else []
+            return parse_items(rows),False
+        result=client.call('navigation','getCategoryContentWithFlatNavigation',{'catid':int(category),'limit':50,'offset':offset,
+            'collection':{'default':True,'name':'Alfabetycznie','type':'sortedby','value':'13'}})
+        rows=result.get('results',[]) if isinstance(result,dict) else []
+        return parse_items(rows),offset+50<result.get('total',len(rows))
+    raise PolsatError('Nieznany katalog Polsat Box Go.')
 
 
 def parse_items(rows):
@@ -232,9 +374,52 @@ def parse_items(rows):
                 out.append(material(row,row['mediaType']=='tv'))
             elif str(row.get('id','')).isdigit() and row.get('name'):
                 resource=('seasons:' if row.get('subCategoriesLabel') in ('Serie','Sezony') else 'category:')+str(row['id'])
-                out.append(Folder(identifier(resource),plain_text(row['name']),'POLSAT',resource,plain_text(row.get('description',''))))
+                out.append(Folder(identifier(resource),plain_text(row['name']),'POLSAT',resource,description_from(row)))
         except (KeyError,TypeError,ValueError):continue
     return out
+
+
+def search(keyword, *, stop=None, on_page=None):
+    """Use the provider's search windows, which can contain grouped results."""
+    keyword = plain_text(keyword).strip()
+    if len(keyword) < 2:
+        raise CatalogError('Wpisz co najmniej dwa znaki.')
+    if stop is not None and stop.is_set():
+        return []
+    results, seen = [], set()
+    offset = 0
+    with catalogue_connection() as connection:
+        client = Client(connection=connection)
+        while offset < 500:
+            if stop is not None and stop.is_set():
+                return []
+            limit = min(50, 500 - offset)
+            payload = client.call('navigation', 'searchContent', {'query': keyword, 'limit': limit, 'offset': offset})
+            if stop is not None and stop.is_set():
+                return []
+            if not isinstance(payload, dict) or not isinstance(payload.get('results'), list):
+                raise CatalogError('Nieprawidłowa lista wyników Polsat Box Go.')
+            rows = payload['results']
+            total = payload.get('total', offset + len(rows))
+            if type(total) is not int or total < 0:
+                raise CatalogError('Nieprawidłowa liczba wyników Polsat Box Go.')
+            width = payload.get('limit', limit)
+            if type(width) is not int or not 0 < width <= limit or payload.get('offset', offset) != offset:
+                raise CatalogError('Nieprawidłowy zakres wyników Polsat Box Go.')
+            previous_count = len(results)
+            for item in parse_items(rows):
+                if item.id not in seen:
+                    seen.add(item.id)
+                    results.append(item)
+            # A single series may represent several matches in this window.
+            offset += width
+            if not rows or offset >= min(total, 500):
+                break
+            if on_page is not None and len(results) > previous_count:
+                client.latest()
+                on_page(results.copy())
+        client.latest()
+    return results
 
 
 def check_access(item):
@@ -273,7 +458,7 @@ def programmes(item,stop):
                     event_id=str(row['id'])
                     if not re.fullmatch('[A-Za-z0-9_-]{1,180}',event_id):continue
                     parsed.append({'title':plain_text(row.get('title','Audycja')),'start':start,'end':end,
-                        'description':plain_text(row.get('description','')),'subtitle':'','polsat_epg_id':event_id})
+                        'description':description_from(row),'subtitle':'','polsat_epg_id':event_id})
                 except (KeyError,ValueError,TypeError):continue
             return parsed
         for row in load('polsat',channel,day,fetch_day,stop):

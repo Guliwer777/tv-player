@@ -3,14 +3,19 @@ import json
 import re
 import time
 import uuid
+from contextlib import closing, contextmanager
 from datetime import datetime,timezone
-from urllib.request import Request,build_opener,HTTPRedirectHandler
+from http.client import HTTPSConnection, HTTPException
+from ssl import SSLEOFError
+from urllib.request import Request,build_opener,HTTPRedirectHandler,getproxies,proxy_bypass
 try:
     from . import polsat_account as account
 except ImportError:
     import polsat_account as account
 
-BASE='https://b2c.redefine.pl/rpc/'
+RPC_HOST='b2c.redefine.pl'
+BASE=f'https://{RPC_HOST}/rpc/'
+RESPONSE_LIMIT=6_000_000
 AGENT={'application':'native','build':22300,'deviceType':'tv','os':'android','player':'cpplayer','portal':'pbg','widevine':True}
 
 
@@ -22,14 +27,46 @@ class NoRedirect(HTTPRedirectHandler):
     def redirect_request(self,*args,**kwargs):raise PolsatError('Nieoczekiwane przekierowanie Polsat Box Go.')
 
 
-def rpc(namespace,method,params):
+@contextmanager
+def catalogue_connection():
+    """Reuse TLS for catalogue reads while respecting the system HTTPS proxy."""
+    if getproxies().get('https') and not proxy_bypass(RPC_HOST):
+        yield None
+        return
+    with closing(HTTPSConnection(RPC_HOST, timeout=20)) as connection:
+        yield connection
+
+
+def _read_reused(connection, request):
+    # The server can close an idle socket between two read-only requests.
+    reused = connection.sock is not None
+    for attempt in range(2 if reused else 1):
+        try:
+            connection.request('POST', request.selector, request.data, dict(request.header_items()))
+            with connection.getresponse() as response:
+                if 300 <= response.status < 400:
+                    raise PolsatError('Nieoczekiwane przekierowanie Polsat Box Go.')
+                if not 200 <= response.status < 300:
+                    raise ValueError()
+                return response.read(RESPONSE_LIMIT + 1)
+        except (ConnectionError, SSLEOFError):
+            connection.close()
+            if not reused or attempt:
+                raise
+
+
+def rpc(namespace,method,params,*,connection=None):
     if namespace not in ('auth','navigation','drm') or not re.fullmatch('[A-Za-z][A-Za-z0-9]{1,70}',method):raise ValueError('Niepoprawna metoda.')
     endpoint=BASE+namespace+('/login/' if method=='login' else '/')
     data=json.dumps({'id':1,'jsonrpc':'2.0','method':method,'params':params}).encode()
     try:
         request=Request(endpoint,data=data,headers={'Content-Type':'application/json','User-Agent':'pbg_tv_android_native_cpplayer/22300','Origin':'https://polsatboxgo.pl','Referer':'https://polsatboxgo.pl/'})
-        with build_opener(NoRedirect()).open(request,timeout=20) as response:raw=response.read(6000001)
-        if len(raw)>6000000:raise ValueError()
+        if connection is None:
+            with build_opener(NoRedirect()).open(request,timeout=20) as response:
+                raw=response.read(RESPONSE_LIMIT + 1)
+        else:
+            raw=_read_reused(connection, request)
+        if len(raw)>RESPONSE_LIMIT:raise ValueError()
         result=json.loads(raw)
         if not isinstance(result,dict):raise ValueError()
         if 'error' in result:
@@ -38,7 +75,13 @@ def rpc(namespace,method,params):
             raise PolsatError('Polsat Box Go odrzucił żądanie'+suffix+'. Sprawdź konto, profil i dostęp do materiału.')
         if 'result' not in result:raise ValueError()
         return result['result']
-    except (OSError,ValueError,TypeError):
+    except PolsatError:
+        if connection is not None:
+            connection.close()
+        raise
+    except (OSError,HTTPException,ValueError,TypeError):
+        if connection is not None:
+            connection.close()
         raise PolsatError('Nie udało się połączyć z Polsat Box Go lub odpowiedź jest nieprawidłowa.') from None
 
 
@@ -47,11 +90,11 @@ def common(record):
             'userAgentData':dict(AGENT),'message':{'id':str(uuid.uuid4()),'timestamp':datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}}
 
 
-def authenticated(record,namespace,method,fields=None):
+def authenticated(record,namespace,method,fields=None,*,connection=None):
     params=common(record)
     params.update(fields or {})
     params['authData']={'sessionToken':account.session_token(record['session'],namespace,method)}
-    return rpc(namespace,method,params)
+    return rpc(namespace,method,params,connection=connection)
 
 
 def session_from(result):
@@ -61,9 +104,10 @@ def session_from(result):
 
 
 class Client:
-    def __init__(self,record=None,persist=True):
+    def __init__(self,record=None,persist=True,*,connection=None):
         self.record=record if record is not None else account.load()
         self.persist=persist;self.confirmed=False
+        self.connection=connection
         if not self.record:raise PolsatError('Najpierw połącz konto Polsat Box Go kodem.')
         account.validate(self.record)
 
@@ -109,7 +153,7 @@ class Client:
         if not profile:raise PolsatError('Najpierw wybierz profil w menu Polsat Box Go — Profil.')
         with account.LOCK:
             self.latest()
-            result=authenticated(self.record,'auth','getSession')
+            result=authenticated(self.record,'auth','getSession',connection=self.connection)
             self.record=dict(self.record,session=session_from(result));account.validate(self.record)
             if str(result.get('profileId',''))!=profile['id']:
                 self.select_profile(profile)
@@ -119,7 +163,7 @@ class Client:
         with account.LOCK:
             self.latest()
             self.ensure_profile()
-            return authenticated(self.record,namespace,method,fields)
+            return authenticated(self.record,namespace,method,fields,connection=self.connection)
 
 
 class CodePairing:

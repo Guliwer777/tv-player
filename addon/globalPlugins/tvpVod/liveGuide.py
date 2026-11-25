@@ -69,3 +69,17 @@ def description(event,order="title,time,channel"):
     if not text and material.start:text=plain_text(material.description)
     from .programmeFormat import event_label,channel_name
     return event_label(event,channel_name(material),order)+'\n'+(text or 'Dostawca nie udostępnił opisu tej audycji.')
+
+
+def current_description(item, order="title,time,channel"):
+    if item.kind == 'POLSAT_LIVE':
+        from .polsat import current_programme
+    elif item.kind == 'PLAYERPL_LIVE':
+        from .playerpl import current_programme
+    else:
+        return item.description
+    event = current_programme(item)
+    text = (description(dict(event,material=item),order) if event
+            else 'Dostawca nie udostępnił danych o bieżącej audycji.')
+    station = item.description.strip()
+    return text+'\n\n'+station if station else text
