@@ -3,8 +3,6 @@
 Build as a console executable (hidden by the caller), never load wx DLLs in NVDA.
 """
 import argparse
-import ctypes
-from ctypes import wintypes
 import json
 import os
 from pathlib import Path
@@ -39,32 +37,26 @@ def emit(value):
 class Host(WindowMode,wx.Frame):
     def __init__(self, options):
         self.playerpl=getattr(options,'playerpl',False)
-        options.parent=0  # All browser images stay separate, so fullscreen never resizes NVDA.
         super().__init__(None, title='TV Player — Polsat Box Go' if options.polsat else 'TV Player — CANAL+' if options.canal else 'TV Player — odtwarzacz',
-                         style=wx.NO_BORDER if options.parent else wx.DEFAULT_FRAME_STYLE,
                          size=(900,650))
         self.canal=options.canal
         self.polsat=options.polsat
         self.closed = False
         self.setup_window_mode(emit)
-        self.embedded = False
         self.direct = None
-        if options.polsat or self.playerpl:
-            os.environ['WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS']=(os.environ.get('WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS','')+' --autoplay-policy=no-user-gesture-required --disable-background-timer-throttling --disable-renderer-backgrounding').strip()
         if options.direct:
-            os.environ['WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS']=(os.environ.get('WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS','')+' --autoplay-policy=no-user-gesture-required').strip()
             from direct_server import DirectServer
             import re
             sport=urlsplit(options.url).hostname=='sport.tvp.pl'
             identifiers=re.findall(r'^/([0-9]+)(?=/|$)' if sport else r',([0-9]+)(?=/|$)',urlsplit(options.url).path)
             if not identifiers:raise ValueError('Brak identyfikatora materiału TVP.')
             self.direct=DirectServer(int(identifiers[-1]),{'start':options.start,'volume':options.volume,'pause':options.paused,'quality':options.quality},options.video_type,options.protocol,provider='SPORT' if sport else 'VOD')
-        self.parent_handle = options.parent
         self.view = html2.WebView.New(self, backend=html2.WebViewBackendEdge)
         if not self.view:
             raise RuntimeError('Nie udało się utworzyć okna WebView2.')
         self.view.AddScriptMessageHandler('tvp_bridge')
         self.view.AddUserScript(KEY_SCRIPT)
+        self.view.AddUserScript((Path(__file__).parent/'audio_gain.js').read_text(encoding='utf-8'))
         if self.playerpl or self.polsat:
             self.view.AddUserScript((Path(__file__).parent/'audio_hooks.js').read_text(encoding='utf-8'))
         if self.canal and options.canal_probe:
@@ -80,7 +72,11 @@ class Host(WindowMode,wx.Frame):
             from polsat_account import load,bootstrap,AccountError
             record=load()
             if not record:raise RuntimeError('Najpierw połącz konto Polsat Box Go.')
-            self.view.AddUserScript(bootstrap(record))
+            channel=urlsplit(options.url)
+            reuse=(options.video_type=='LIVE' and channel.path.startswith('/kanaly-tv/')
+                   and 'tvpStartOver' not in parse_qs(channel.query,keep_blank_values=True)
+                   and not options.polsat_retry)
+            self.view.AddUserScript(bootstrap(record,reuse_live_session=reuse))
         if self.canal:
             from canal_account import load, bootstrap, channel_script, AccountError
             try:
@@ -109,87 +105,25 @@ class Host(WindowMode,wx.Frame):
         layout=wx.BoxSizer(wx.VERTICAL)
         layout.Add(self.view,1,wx.EXPAND)
         self.SetSizer(layout)
-        if options.parent:
-            try:
-                self.embed(options.parent)
-                self.embedded=True
-            except OSError as error:
-                if error.winerror!=5:raise RuntimeError('Osadzanie obrazu w NVDA: '+str(error)) from error
-                # Installed NVDA may use UIAccess, unlike the isolated QA
-                # program. Keep native controls in NVDA and the video in our
-                # own non-activating window if Windows refuses SetParent.
-                self.SetWindowStyleFlag(wx.NO_BORDER | wx.FRAME_NO_TASKBAR)
-                emit({'event':'player-notice','message':'Windows nie pozwolił osadzić obrazu w NVDA. Odtwarzacz użyje osobnego okna obrazu; przyciski i skróty pozostają we wtyczce.'})
-        self.timer = wx.Timer(self)
-        self.Bind(wx.EVT_TIMER, self.resize, self.timer)
-        self.timer.Start(200)
-        if options.parent:self.ShowWithoutActivating()
         self.Layout()
         self.view.LoadURL(self.direct.url if self.direct else options.url)
         threading.Thread(target=self.read,daemon=True).start()
 
-    def embed(self, parent):
-        self.user=ctypes.WinDLL('user32',use_last_error=True)
-        self.user.SetParent.argtypes=[wintypes.HWND,wintypes.HWND]
-        self.user.SetParent.restype=wintypes.HWND
-        self.user.GetClientRect.argtypes=[wintypes.HWND,ctypes.POINTER(wintypes.RECT)]
-        self.user.GetClientRect.restype=wintypes.BOOL
-        self.user.IsWindow.argtypes=[wintypes.HWND]
-        self.user.IsWindow.restype=wintypes.BOOL
-        self.user.GetWindowLongW.argtypes=[wintypes.HWND,ctypes.c_int]
-        self.user.GetWindowLongW.restype=ctypes.c_long
-        self.user.SetWindowLongW.argtypes=[wintypes.HWND,ctypes.c_int,ctypes.c_long]
-        self.user.SetWindowLongW.restype=ctypes.c_long
-        self.user.SetWindowPos.argtypes=[wintypes.HWND,wintypes.HWND,ctypes.c_int,ctypes.c_int,ctypes.c_int,ctypes.c_int,wintypes.UINT]
-        self.user.SetWindowPos.restype=wintypes.BOOL
-        self.user.IsWindowVisible.argtypes=[wintypes.HWND]
-        self.user.IsWindowVisible.restype=wintypes.BOOL
-        self.user.ClientToScreen.argtypes=[wintypes.HWND,ctypes.POINTER(wintypes.POINT)]
-        self.user.ClientToScreen.restype=wintypes.BOOL
-        handle=self.GetHandle()
-        style=self.user.GetWindowLongW(handle,-16)
-        self.user.SetWindowLongW(handle,-16,(style & ~0x80000000)|0x40000000)
-        ctypes.set_last_error(0)
-        if not self.user.SetParent(handle,parent) and ctypes.get_last_error():
-            error=ctypes.get_last_error()
-            if error==5:
-                # A topmost UIAccess parent can reject a non-topmost child.
-                # Match z-order once, as recommended for SetParent by Microsoft.
-                self.user.SetWindowPos(handle,wintypes.HWND(-1),0,0,0,0,0x13)
-                ctypes.set_last_error(0)
-                if self.user.SetParent(handle,parent) or not ctypes.get_last_error():return
-                error=ctypes.get_last_error()
-                self.user.SetWindowPos(handle,wintypes.HWND(-2),0,0,0,0,0x13)
-            self.user.SetWindowLongW(handle,-16,style)
-            raise ctypes.WinError(error)
-
-    def resize(self, event):
-        if self.parent_handle:
-            if not self.user.IsWindow(self.parent_handle):
-                self.Close()
-                return
-            rect=wintypes.RECT()
-            if self.user.GetClientRect(self.parent_handle,ctypes.byref(rect)):
-                wanted=(max(1,rect.right),max(1,rect.bottom))
-                if self.embedded:
-                    if tuple(self.GetSize())!=wanted:self.SetSize(0,0,*wanted)
-                else:
-                    if not self.user.IsWindowVisible(self.parent_handle):
-                        self.Hide();return
-                    point=wintypes.POINT(0,0)
-                    if self.user.ClientToScreen(self.parent_handle,ctypes.byref(point)):
-                        if tuple(self.GetSize())!=wanted or tuple(self.GetPosition())!=(point.x,point.y):
-                            self.SetSize(point.x,point.y,*wanted)
-                    if not self.IsShown():self.ShowWithoutActivating()
-
     def canal_new_window(self,event):
         event.Veto()
-        if self.trusted_page(event.GetURL()):self.view.LoadURL(event.GetURL())
+        url=event.GetURL()
+        if self.playerpl:
+            from playerpl import login_url
+            if login_url(url):
+                self.view.LoadURL(url)
+                return
+        if self.trusted_page(url):self.view.LoadURL(url)
 
     def navigate(self,event):
         if self.playerpl:
-            from playerpl import official_url as playerpl_url
-            if not playerpl_url(event.GetURL()):event.Veto()
+            from playerpl import official_url as playerpl_url, login_url
+            url=event.GetURL()
+            if not (playerpl_url(url) or login_url(url)):event.Veto()
             return
         if self.polsat:
             from polsat import official_url as polsat_url
@@ -252,7 +186,6 @@ class Host(WindowMode,wx.Frame):
 
     def close(self,event):
         self.closed=True
-        self.timer.Stop()
         if self.direct:self.direct.close()
         self.Destroy()
 
@@ -275,10 +208,11 @@ def main():
         import ssl
         context=ssl.create_default_context()
         if context.verify_mode!=ssl.CERT_REQUIRED:raise RuntimeError('Nieprawidłowe sprawdzanie certyfikatów TLS.')
-        for name in ('bridge.js','canal_bridge.js','polsat_bridge.js','playerpl_bridge.js','audio_hooks.js','index.html','direct.js','bootstrap.js','vendor/shaka-player.compiled.js'):
+        for name in ('bridge.js','canal_bridge.js','polsat_bridge.js','playerpl_bridge.js','audio_gain.js','audio_hooks.js','index.html','direct.js','bootstrap.js','vendor/shaka-player.compiled.js'):
             if not (Path(__file__).parent/name).is_file():raise RuntimeError('Brak składnika odtwarzacza: '+name)
         emit({'event':'component-check','tls':True,'resources':True});return
     parser=argparse.ArgumentParser()
+    # Earlier launchers pass a parent HWND. Browser windows now have their own frame.
     parser.add_argument('--parent',type=int,default=0)
     parser.add_argument('--url',required=True)
     parser.add_argument('--start',type=float,default=0)
@@ -289,6 +223,7 @@ def main():
     parser.add_argument('--account',action='store_true')
     parser.add_argument('--canal',action='store_true')
     parser.add_argument('--polsat',action='store_true')
+    parser.add_argument('--polsat-retry',action='store_true')
     parser.add_argument('--playerpl',action='store_true')
     parser.add_argument('--canal-probe',action='store_true')
     parser.add_argument('--canal-start',type=float,default=None)
@@ -304,7 +239,7 @@ def main():
     from playerpl import official_url as playerpl_url
     if not (playerpl_url(options.url) if options.playerpl else polsat_url(options.url) if options.polsat else canal_url(options.url) if (options.canal or options.canal_login) else official_url(options.url,allow_sport=options.direct)):
         raise ValueError('Oczekiwano adresu materiału TVP VOD lub TVP Sport.')
-    options.volume=max(0,min(100,options.volume))
+    options.volume=max(0,min(200,options.volume))
     options.start=max(0,options.start)
     app=wx.App(False)
     if options.pair_code:

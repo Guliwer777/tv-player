@@ -3,8 +3,10 @@ const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/st
  const events=[],keys={};let tick;
  const v={readyState:3,muted:false,currentTime:50,duration:1000,volume:.7,paused:false,getBoundingClientRect:()=>({width:900}),seekable:{length:1,start:()=>0,end:()=>1000},play(){this.paused=false;return Promise.resolve();},pause(){this.paused=true;}};
  const context={location:{origin:'https://www.canalplus.com'},document:{querySelectorAll:()=>[v]},setInterval(fn){tick=fn;},window:{tvp_bridge:{postMessage:p=>events.push(JSON.parse(p))},addEventListener:(k,f)=>keys[k]=f}};
- vm.runInNewContext(fs.readFileSync('webplayer/canal_bridge.js','utf8'),context);
+ const source=fs.readFileSync('webplayer/canal_bridge.js','utf8').replace('__SETTINGS__',JSON.stringify({pause:false}));
+ vm.runInNewContext(source,context);
  tick();assert(events.some(e=>e.event==='file-loaded'));
+ v.muted=true;v.paused=true;tick();assert(context.window.__tvpCommand,'muted catalogue video remains controllable');v.muted=false;v.paused=false;
  await context.window.__tvpCommand({command:['cycle','pause']});assert(v.paused);
  await context.window.__tvpCommand({command:['seek',30,'relative+exact']});assert.equal(v.currentTime,80);
  await context.window.__tvpCommand({command:['set_property','volume',65]});assert.equal(v.volume,.65);
@@ -55,6 +57,6 @@ const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/st
  for(let i=0;i<24;i++)timers.shift()();
  v.readyState=3;timers.shift()();
  assert(events.slice(beforeDelayed).some(e=>e.event==='replay-probe'&&e.available===true));
- const other={...context,location:{origin:'https://logowanie.pl.canalplus.com'},window:{}};vm.runInNewContext(fs.readFileSync('webplayer/canal_bridge.js','utf8'),other);assert.equal(other.window.__tvpCommand,undefined);
+ const other={...context,location:{origin:'https://logowanie.pl.canalplus.com'},window:{}};vm.runInNewContext(source,other);assert.equal(other.window.__tvpCommand,undefined);
  console.log('PASS: CANAL+ pause, seek, volume, time, shortcuts; login fields and auth origin untouched; no false watched event');
 })().catch(e=>{console.error(e);process.exitCode=1});

@@ -21,6 +21,7 @@ subprocess.run([sys.executable,'-m','PyInstaller','--noconfirm','--clean','--one
     '--add-data',str(root/'webplayer/canal_bridge.js')+os.pathsep+'.',
     '--add-data',str(root/'webplayer/polsat_bridge.js')+os.pathsep+'.',
     '--add-data',str(root/'webplayer/playerpl_bridge.js')+os.pathsep+'.',
+    '--add-data',str(root/'webplayer/audio_gain.js')+os.pathsep+'.',
     '--add-data',str(root/'webplayer/audio_hooks.js')+os.pathsep+'.',
     '--add-data',str(root/'webplayer/index.html')+os.pathsep+'.',
     '--add-data',str(root/'webplayer/direct.js')+os.pathsep+'.',

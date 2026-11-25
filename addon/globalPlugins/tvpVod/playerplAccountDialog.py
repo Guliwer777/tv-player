@@ -3,7 +3,7 @@ import threading
 import wx
 import ui
 from . import playerpl_account as account
-from .playerpl_api import CodePairing,PlayerError,profiles
+from .playerpl_api import CodePairing,PlayerError,current_record,profiles
 from .canal_browser import BROWSERS,open_url
 
 def open_account(parent):PairingDialog(parent).Show()
@@ -11,7 +11,7 @@ def open_account(parent):PairingDialog(parent).Show()
 def choose_profile(parent):
     def worker():
         try:
-            record=account.load()
+            record=current_record()
             if not record:raise PlayerError('Najpierw połącz konto Player.')
             rows=profiles(record)
             if not rows:raise PlayerError('Player nie zwrócił profili. Nie zmieniono profilu.')

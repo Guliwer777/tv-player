@@ -3,13 +3,17 @@
 (() => {
   if (location.origin !== 'https://www.canalplus.com') return;
   const send=p=>window.tvp_bridge.postMessage(JSON.stringify(p));
+  const settings=__SETTINGS__;
+  const audio=window.__tvpAudioGain || {set:(video,value)=>video.volume=Math.max(0,Math.min(1,Number(value)/100)),get:video=>video.volume*100};
   let current=null,loaded=false,lastTime=-1,lastPause=null,lastTracks='',audioSwitch=Promise.resolve(),restartCheck=0;
   const official=()=>window.__tvpCanalPlayer;
   const languages=()=>{try{return official()?.getAvailableLanguages()||[];}catch(_){return [];}};
   const selected=()=>{try{const now=official()?.getCurrentLanguage();return languages().findIndex(a=>a.id===now?.id)+1;}catch(_){return 0;}};
   const video=()=>{
-    const items=[...document.querySelectorAll('video')].filter(v=>v.readyState>=1 && !v.muted && v.getBoundingClientRect().width>100);
-    return items.find(v=>!v.paused)||items[0]||null;
+    const items=[...document.querySelectorAll('video')].filter(v=>v.readyState>=1 && v.getBoundingClientRect().width>100);
+    // Catalogue material may be created muted before the official client
+    // unmutes it. Do not mistake that temporary state for a missing player.
+    return items.find(v=>!v.paused&&!v.muted)||items.find(v=>!v.paused)||items.find(v=>!v.muted)||items[0]||null;
   };
   const live=v=>location.hash?.startsWith('#tvp-player-channel=') || !Number.isFinite(v.duration) || v.duration>10000000;
   const timing=v=>{
@@ -32,7 +36,10 @@
   function notice(message){send({event:'player-notice',message});}
   window.__tvpCommand=async packet=>{
     const v=video(),c=packet.command||[];
-    if(!v){notice('CANAL+: zaloguj się i wybierz Oglądaj w oficjalnym oknie. Nie wykryto aktywnego materiału.');return;}
+    if(!v){
+      if(c[0]==='get_property' && packet.request_id)send({request_id:packet.request_id,error:'unavailable',data:null});
+      return;
+    }
     try {
       if(c[0]==='replay-probe'){
         const target=Number(c[1]),p=official();
@@ -50,7 +57,7 @@
         setTimeout(verify,250);
       } else if(c[0]==='get_property'){
         if(c[1]==='aid')await audioSwitch;
-        const value=c[1]==='time-pos'?Math.max(0,v.currentTime-base(v)):c[1]==='duration'?length(v):c[1]==='volume'?v.volume*100:c[1]==='aid'?selected():null;
+        const value=c[1]==='time-pos'?Math.max(0,v.currentTime-base(v)):c[1]==='duration'?length(v):c[1]==='volume'?audio.get(v):c[1]==='aid'?selected():null;
         send({request_id:packet.request_id,error:value===null?'unsupported':'success',data:value});
       } else if(c[0]==='cycle' && c[1]==='pause'){if(v.paused)await v.play();else v.pause();}
       else if(c[0]==='seek'){
@@ -83,15 +90,18 @@
         if(!track || !official()?.setLanguage){notice('Nie ma wybranej ścieżki dźwiękowej.');return;}
         official().setLanguage(track);
         audioSwitch=new Promise(resolve=>{let attempts=0;const check=()=>{if(selected()===Number(c[2])||++attempts>=40)resolve();else setTimeout(check,100);};check();});
-      } else if(c[0]==='set_property' && c[1]==='volume')v.volume=Math.max(0,Math.min(1,Number(c[2])/100));
+      } else if(c[0]==='set_property' && c[1]==='volume')audio.set(v,c[2]);
       else if(c[0]==='set_property' && c[1]==='pause'){if(c[2])v.pause();else await v.play();}
-      else if(c[0]==='add' && c[1]==='volume')v.volume=Math.max(0,Math.min(1,v.volume+Number(c[2])/100));
+      else if(c[0]==='add' && c[1]==='volume')audio.set(v,audio.get(v)+Number(c[2]));
       else notice('CANAL+: ta funkcja nie jest jeszcze obsługiwana przez integrację. Użyj opcji oficjalnego odtwarzacza.');
     }catch(_){notice('CANAL+ nie wykonał polecenia. Sprawdź stan oficjalnego odtwarzacza.');}
   };
   setInterval(()=>{
     const v=video();if(!v)return;
-    if(v!==current){current=v;loaded=false;lastPause=null;lastTime=-1;}
+    if(v!==current){
+      current=v;loaded=false;lastPause=null;lastTime=-1;
+      if(!settings.pause && v.paused)v.play().catch(()=>{});
+    }
     if(!loaded && !v.paused){loaded=true;send({event:'file-loaded'});}
     if(!loaded)return;
     const tracks=languages().map((a,i)=>({type:'audio',id:i+1,lang:a.language||a.normalized||'',title:(a.label||a.name||({pl:'Polski',pol:'Polski',qaa:'Język oryginalny (oznaczenie CANAL+)'}[a.language])||a.language||a.normalized||('Ścieżka '+(i+1)))+((a.audioDescription===true||a.normalized==='qad')?' — audiodeskrypcja (oznaczenie CANAL+)':''),selected:i+1===selected()}));
@@ -99,7 +109,7 @@
     if(serialized!==lastTracks){lastTracks=serialized;send({event:'property-change',name:'track-list',data:tracks});}
     if(Math.floor(v.currentTime)!==lastTime){lastTime=Math.floor(v.currentTime);send({event:'property-change',name:'time-pos',data:Math.max(0,v.currentTime-base(v))});}
     send({event:'property-change',name:'duration',data:length(v)});
-    send({event:'property-change',name:'volume',data:v.volume*100});
+    send({event:'property-change',name:'volume',data:audio.get(v)});
     if(v.paused!==lastPause){lastPause=v.paused;send({event:'property-change',name:'pause',data:v.paused});}
     // No automatic watched marking: a finished trailer/advert is not the main film.
   },1000);

@@ -34,7 +34,28 @@ def remote_open(request,allowed):
 def live_delivery_hosts(manifest):
     """Resolve only this official FAST manifest's delivery nodes, not a domain wildcard."""
     initial=urlsplit(manifest)
-    if initial.hostname!='r.dcs.redcdn.pl':return manifest,set()
+    if initial.hostname!='r.dcs.redcdn.pl' and not (initial.hostname or '').endswith('.cdn.tvp.pl'):
+        return manifest,set()
+    if initial.hostname!='r.dcs.redcdn.pl':
+        # TVP's HLS channels can redirect from its token host to one exact
+        # Orange CDN node. Pin that destination before starting Shaka: the
+        # relay still cannot reach any other host.
+        allowed={initial.hostname}
+        class ManifestRedirect(HTTPRedirectHandler):
+            redirects=0
+            def redirect_request(self,request,fp,code,msg,headers,newurl):
+                target=urlsplit(newurl)
+                if (self.redirects>=2 or urlsplit(request.full_url).hostname not in allowed or target.scheme!='https'
+                    or target.port not in (None,443) or target.username
+                    or not (target.hostname or '').endswith('.cache.orange.pl')):
+                    raise HTTPError(newurl,403,'Unexpected TVP manifest redirect',headers,fp)
+                self.redirects+=1
+                allowed.add(target.hostname)
+                return super().redirect_request(request,fp,code,msg,headers,newurl)
+        with build_opener(ManifestRedirect()).open(Request(manifest,headers={'User-Agent':'NVDA-TvpVod/0.9','Referer':'https://vod.tvp.pl/'}),timeout=25) as response:
+            response.read(5000001)
+            resolved=response.url
+        return resolved,allowed
     allowed={initial.hostname}
     class ManifestRedirect(HTTPRedirectHandler):
         def redirect_request(self,request,fp,code,msg,headers,newurl):
@@ -87,7 +108,13 @@ def playlist(identifier,video_type='MOVIE',protocol='AUTO'):
     for link in [manifest,*servers.values()]:
         parts=urlsplit(link)
         if parts.scheme!='https' or not parts.hostname or parts.username:raise ValueError('Niepoprawny adres strumienia TVP.')
-    manifest,delivery_hosts=live_delivery_hosts(manifest) if video_type=='LIVE' else (manifest,set())
+    # VOD and live streams can both begin on a TVP token host and redirect to
+    # an exact delivery node. For VOD, retain the original manifest if this
+    # optional preflight cannot prove the provider's redirect chain.
+    if video_type=='LIVE':manifest,delivery_hosts=live_delivery_hosts(manifest)
+    else:
+        try:manifest,delivery_hosts=live_delivery_hosts(manifest)
+        except (OSError,ValueError):delivery_hosts=set()
     return {'manifest':manifest,'servers':servers,'protocol':protocol,'deliveryHosts':sorted(delivery_hosts)}
 
 

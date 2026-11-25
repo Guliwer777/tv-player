@@ -16,6 +16,14 @@ class PlayerTests(unittest.TestCase):
   self.assertTrue(catalog.official_url('https://player.pl/live?channel=1'))
   for url in ('https://player.pl.evil/live','http://player.pl/','https://user@player.pl/','https://player.pl:444/','https://player.pl:bad/'):
    self.assertFalse(catalog.official_url(url))
+ def test_account_navigation_is_separate_from_playback_urls(self):
+  for host in ('account.tvn.pl','oauth.account.tvn.pl'):
+   url='https://'+host+'/login'
+   self.assertTrue(catalog.login_url(url))
+   self.assertFalse(catalog.official_url(url))
+  for url in ('https://account.tvn.pl.example/login','http://account.tvn.pl/','https://user@account.tvn.pl/',
+              'https://@account.tvn.pl/','https://account.tvn.pl:4343/','https://player.pl/'):
+   self.assertFalse(catalog.login_url(url))
  def test_episode_without_title_has_series_season_and_number(self):
   item=catalog.material({'id':40,'type':'EPISODE','title':'','episode':3,'season':{'id':2,'number':2,'serial':{'id':1,'title':'Serial','slug':'serial','mainCategory':{'id':1,'slug':'seriale-online'}}}})
   self.assertEqual(item.title,'Serial — sezon 2, odcinek 3');self.assertIn('S02E03,40',item.url)
@@ -52,6 +60,16 @@ class PlayerTests(unittest.TestCase):
  def test_bootstrap_only_runs_on_exact_origin(self):
   self.assertIn("location.origin!=='https://player.pl'",account.bootstrap(record()))
   self.assertNotIn('access_token',account.bootstrap(record()))
+ def test_website_cookies_preserve_wire_encoding_and_issuer_uid(self):
+  value=record()
+  value['cookies']={'uid':'issued%2Buid','konto_tvn_at':'issued%2Ftoken%3D','subscriber_pub':'bad; Path=/other'}
+  value['user_pub']='public=value'
+  script=account.bootstrap(value)
+  cookies,_=json.JSONDecoder().raw_decode(script.split('Object.entries(',1)[1])
+  self.assertEqual(cookies['uid'],'issued%2Buid')
+  self.assertEqual(cookies['konto_tvn_at'],'issued%2Ftoken%3D')
+  self.assertEqual(cookies['subscriber_pub'],'public%3Dvalue')
+  self.assertNotIn('encodeURIComponent(value)',script)
  def test_request_rejects_external_resource_before_network(self):
   for resource in ('https://evil/','../subscriber','subscriber?token=secret'):
    with self.assertRaises(api.PlayerError):api.request(resource,record=record())
@@ -60,6 +78,14 @@ class PlayerTests(unittest.TestCase):
   with patch.object(api,'request') as request:
    with self.assertRaises(api.PlayerError):client.finish()
    request.assert_not_called()
+ def test_current_record_uses_valid_token_through_its_last_second(self):
+  value=record();value['expires_at']=1000
+  with patch.object(account,'load',return_value=value),patch.object(api.time,'time',return_value=999),patch.object(api,'request') as rpc:
+   self.assertIs(api.current_record(),value)
+   self.assertIs(api.refresh(force=False),value)
+   rpc.assert_not_called()
+  with patch.object(account,'load',return_value=value),patch.object(api.time,'time',return_value=1000),patch.object(api,'refresh') as renew:
+   api.current_record();renew.assert_called_once_with(force=False)
  def test_successful_oauth_code_is_not_an_api_error(self):
   class Response(BytesIO):
    def __enter__(self):return self
@@ -78,6 +104,32 @@ class PlayerTests(unittest.TestCase):
  def test_login_keeps_selected_profile_only_if_server_confirms(self):
   with patch.object(api,'request',return_value={'active':True,'profile':{'externalUid':'other','name':'Inny'}}),patch.object(api,'profiles',return_value=[]):
    with self.assertRaises(api.PlayerError):api.login_record(record())
+ def test_website_login_uses_current_token_and_only_fresh_session_cookies(self):
+  from email.message import Message
+  from types import SimpleNamespace
+  from urllib.request import Request
+  for cookie in ('konto_tvn_at=new%3D; Path=/; Secure','konto_tvn_at=; Path=/; Max-Age=0; Secure',None):
+   value=record();value['cookies']={'uid':'site-device','konto_tvn_at':'old','subscriber_pub':'old-subscriber'}
+   def reply(resource,*,data,record,jar):
+    self.assertEqual(record['cookies'],{'uid':'site-device'})
+    self.assertEqual(data['token'],value['access_token'])
+    headers=Message()
+    if cookie:headers.add_header('Set-Cookie',cookie)
+    jar.extract_cookies(SimpleNamespace(info=lambda:headers),Request(api.API+resource))
+    return {'active':True,'profile':{'externalUid':'profile','name':'Wybrany'}}
+   with self.subTest(cookie=cookie),patch.object(api,'request',side_effect=reply):
+    result=api.login_record(value)
+    self.assertEqual(result['cookies'].get('konto_tvn_at'),'new%3D' if cookie and 'new%3D' in cookie else None)
+ def test_refresh_keeps_newly_selected_profile_and_rotated_token(self):
+  initial=record()
+  latest=dict(initial,profile={'id':'other','name':'Drugi'},cookies={'profile_uid':'other','samuid':'other'})
+  with patch.object(account,'load',side_effect=[initial,latest]),patch.object(api,'request',return_value={'refresh_token':'rotated'}),patch.object(api,'login_record',side_effect=lambda r:r),patch.object(account,'save') as save:
+   result=api.refresh()
+  self.assertEqual(result['refresh_token'],'rotated')
+  self.assertEqual(result['profile'],latest['profile'])
+  self.assertEqual(result['cookies']['profile_uid'],'other')
+  self.assertEqual(result['cookies']['samuid'],'other')
+  save.assert_called_once_with(result)
  def test_refresh_never_restores_disconnected_account(self):
   value=record()
   with patch.object(account,'load',side_effect=[value,None]),patch.object(api,'request',return_value={'access_token':'new'}),patch.object(api,'login_record',side_effect=lambda r:r),patch.object(account,'save') as save:

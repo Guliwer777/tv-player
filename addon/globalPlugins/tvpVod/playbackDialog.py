@@ -64,6 +64,7 @@ class PlaybackDialog(wx.Dialog):
         self.display_title=display_title or material.title
         self.alive = True
         self.player = None
+        self.retiring_player = None
         self.material = material
         self.live_start=live_start
         self.Bind(wx.EVT_CONTEXT_MENU,self.context_menu)
@@ -73,6 +74,7 @@ class PlaybackDialog(wx.Dialog):
         self.on_stopped = on_stopped
         self.on_next = on_next
         self.playback_generation = 0
+        self.live_retry_used = False
         self.automatic_transition = False
         self.purchase_pending = False
         self.last_save = 0
@@ -90,7 +92,6 @@ class PlaybackDialog(wx.Dialog):
         self.paused_state = None
         self.seek_step = self.settings["seekStep"]
         self.position = self.duration = 0
-        self.last_second = -1
         self.audio_ids = []
         self.audio_labels = []
         self.selected_audio = None
@@ -120,7 +121,7 @@ class PlaybackDialog(wx.Dialog):
         self.timeline.Bind(wx.EVT_SET_FOCUS, self.on_timeline_focus)
         layout.Add(self.timeline, 0, wx.EXPAND | wx.ALL, 5)
         layout.Add(wx.StaticText(self, label="Głośność:"), 0, wx.LEFT, 5)
-        self.volume = NamedSlider(self, value=self.settings["volume"], minValue=0, maxValue=100,
+        self.volume = NamedSlider(self, value=self.settings["volume"], minValue=0, maxValue=200,
                                   name="Głośność", spoken_value=lambda: f"{self.volume.GetValue()} procent")
         self.volume.Bind(wx.EVT_SLIDER, lambda event: self.send("set_property", "volume", self.volume.GetValue()))
         layout.Add(self.volume, 0, wx.EXPAND | wx.ALL, 5)
@@ -232,7 +233,7 @@ class PlaybackDialog(wx.Dialog):
                 except OSError:ui.message('Nie udało się zapisać kroku przewijania.')
             ui.message(f"Krok przewijania: {self.seek_step} sekund.")
         elif action in ("volume-up", "volume-down"):
-            value = max(0, min(100, self.volume.GetValue() + (5 if action == "volume-up" else -5)))
+            value = max(0, min(200, self.volume.GetValue() + (5 if action == "volume-up" else -5)))
             self.volume.SetValue(value)
             self.send("set_property", "volume", value)
             ui.message(f"Głośność {value} procent.")
@@ -310,6 +311,7 @@ class PlaybackDialog(wx.Dialog):
     def load_next(self, material, display_title=None):
         """Replace the media while retaining this window, keyboard focus and seek step."""
         self.playback_generation += 1
+        self.live_retry_used = False
         if self.player:self.player.close()
         self.player=None
         self.material=material
@@ -322,7 +324,6 @@ class PlaybackDialog(wx.Dialog):
         self.resume_at=0
         self.position=self.duration=0
         self.last_save=0
-        self.last_second=-1
         self.pending_bookmark=False
         self.pending_audio=self.selected_audio=self.paused_state=None
         self.audio_ids=[];self.audio_labels=[]
@@ -379,49 +380,59 @@ class PlaybackDialog(wx.Dialog):
                 log.info('TV Player startup: '+message)
             except ImportError:pass
         diagnostic('background launch requested')
-        # Capture a Python stack if NVDA stops servicing its GUI during startup.
-        # Only filenames / source lines are recorded, never locals or account data.
-        last_pulse=[started]
-        def pulse():
-            if not self.alive or time.monotonic()-started>60:return
-            last_pulse[0]=time.monotonic()
-            wx.CallLater(250,pulse)
-        pulse()
-        def audit():
-            import sys,traceback
-            recorded=False
-            while self.alive and time.monotonic()-started<60:
-                time.sleep(.5)
-                stalled=time.monotonic()-last_pulse[0]
-                if stalled>2 and not recorded:
-                    frame=sys._current_frames().get(threading.main_thread().ident)
-                    stack=''.join(traceback.format_stack(frame)) if frame else 'stack unavailable'
-                    diagnostic(f'GUI pulse delayed {stalled:.3f} seconds\n'+stack)
-                    recorded=True
-                elif stalled<1:recorded=False
-        threading.Thread(target=audit,daemon=True).start()
-        pending=[];gate=threading.Lock();attached=[False]
+        # A host may send events before the GUI thread attaches it.
+        pending = []
+        gate = threading.Lock()
+        attached = False
+
         def deliver(event):
-            if self.alive and generation==getattr(self,'playback_generation',0):self.handle_event(event)
+            if not self.alive or generation!=self.playback_generation:
+                return
+            if (event.get('event')=='player-error' and event.get('code')=='polsat-live-empty-page'
+                    and self.material.kind=='POLSAT_LIVE' and not self.loaded and not self.live_retry_used):
+                self.live_retry_used=True
+                self.playback_generation+=1
+                # Keep the initialized WebView2 environment alive for the replacement.
+                previous=self.player
+                self.retiring_player=previous
+                previous.command('window-hide')
+                wx.CallLater(15000,self.release_retiring_player,previous)
+                self.player=None
+                self.image_visible=False
+                self.image_button.SetLabel('Pokaż obraz')
+                self.report_error('Trwa uruchamianie kanału Polsat Box Go. Ponawiam próbę.')
+                self.start(url)
+                return
+            self.handle_event(event)
         def packet(event):
             with gate:
-                if not attached[0]:pending.append(event);return
+                if not attached:
+                    pending.append(event)
+                    return
             wx.CallAfter(deliver,event)
         def attach(player):
+            nonlocal attached
             if not self.alive or generation!=getattr(self,'playback_generation',0):player.close();return
             self.player=player
             diagnostic(f'player attached after {time.monotonic()-started:.3f} seconds')
             with gate:
-                attached[0]=True;queued=list(pending);pending.clear()
+                attached = True
+                queued = pending.copy()
+                pending.clear()
             for event in queued:deliver(event)
         def worker():
             try:
                 from .webPlayer import WebPlayer
-                player = WebPlayer(handle, packet,
-                                        url, start=self.resume_at, volume=self.settings["volume"],
-                                        paused=bool(self.from_bookmark and self.settings["resumePaused"]),
-                                        quality=self.settings.get("quality", "auto"), direct=True,
-                                        **({"canal_start":self.live_start} if getattr(self,"live_start",None) is not None else {}))
+                player = WebPlayer(
+                    handle, packet, url,
+                    start=self.resume_at,
+                    volume=self.settings["volume"],
+                    paused=bool(self.from_bookmark and self.settings["resumePaused"]),
+                    quality=self.settings.get("quality", "auto"),
+                    direct=True,
+                    polsat_retry=self.live_retry_used,
+                    canal_start=self.live_start,
+                )
                 diagnostic(f'process creation finished after {time.monotonic()-started:.3f} seconds')
                 wx.CallAfter(attach,player)
             except Exception:
@@ -520,6 +531,7 @@ class PlaybackDialog(wx.Dialog):
                 ui.message("Nie udało się zapisać zakładki: " + str(error))
             return
         if name == "file-loaded":
+            self.release_retiring_player(getattr(self,'retiring_player',None))
             self.loaded = True
             from .audioOutput import restore
             restore(self)
@@ -609,11 +621,17 @@ class PlaybackDialog(wx.Dialog):
         self.hide_to_background()
         ui.message("Odtwarzacz TV Player działa w tle.")
 
+    def release_retiring_player(self, previous):
+        if previous is not None and previous is getattr(self,'retiring_player',None):
+            self.retiring_player=None
+            previous.close()
+
     def stop_playback(self, notify=True):
         if not self.alive:
             return
         self.save_progress()
         self.alive = False
+        self.release_retiring_player(getattr(self,'retiring_player',None))
         if self.player:
             self.player.close()
         if notify and self.on_stopped:

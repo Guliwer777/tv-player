@@ -78,7 +78,7 @@ def session_token(session,namespace,method):
     return text+'|'+signature
 
 
-def bootstrap(record):
+def bootstrap(record, *, reuse_live_session=False):
     """Inject only the paired add-on session on Polsat's exact HTTPS origin."""
     validate(record)
     if not record.get('profile'):raise AccountError('Najpierw wybierz profil Polsat Box Go.')
@@ -87,21 +87,39 @@ def bootstrap(record):
              'profile-id':record['profile']['id'],'profile-selected-at':time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime())}
     return """(()=>{
 if(location.origin!=='https://polsatboxgo.pl')return;
-const cookies=%s,profile=%s,nonce=%s;
-const read=name=>document.cookie.split(';').map(s=>s.trim()).find(s=>s.startsWith(name+'='))?.slice(name.length+1);
-let current=null,previousProfile='';
-try{current=JSON.parse(decodeURIComponent(read('user-session')||''));previousProfile=decodeURIComponent(read('profile-id')||'').replace(/^"|"$/g,'');}catch(_){}
-const changed=previousProfile!==profile||['id','key','keyExpirationTime'].some(key=>current?.[key]!==cookies['user-session'][key]);
-for(const [name,value] of Object.entries(cookies))document.cookie=name+'='+encodeURIComponent(typeof value==='string'?value:JSON.stringify(value))+'; Path=/; Secure; SameSite=Lax';
-window.__tvpPolsatProfile=profile;
-// The first HTTP response precedes AddUserScript and can contain an anonymous page.
-// Reload once with the paired cookies before the page starts its authenticated player.
-if(changed){
- let reload=false;
- try{if(sessionStorage.getItem('tvPlayerBootstrapReload')!==nonce){sessionStorage.setItem('tvPlayerBootstrapReload',nonce);reload=true;}}catch(_){}
- if(reload){
-  const refresh=()=>location.reload();
-  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',refresh,{once:true});else setTimeout(refresh,0);
- }
+const cookies=%s,profile=%s,nonce=%s,tryReuse=%s;
+const encode=value=>encodeURIComponent(typeof value==='string'?value:JSON.stringify(value));
+const live=tryReuse&&window.top===window&&location.pathname.startsWith('/kanaly-tv/')&&
+    !new URLSearchParams(location.search).has('tvpStartOver');
+let matches=false;
+if(live){
+ const before=document.cookie.split(';').map(item=>item.trim());
+ matches=['user-session','profile-id','user-recognition'].every(name=>{
+  const entries=before.filter(item=>item.startsWith(name+'='));
+  return entries.length===1&&entries[0]===name+'='+encode(cookies[name]);
+ });
 }
-})();"""%(json.dumps(cookies,ensure_ascii=True),json.dumps(record['profile']['id']),json.dumps(uuid.uuid4().hex))
+for(const [name,value] of Object.entries(cookies))document.cookie=name+'='+encode(value)+'; Path=/; Secure; SameSite=Lax';
+window.__tvpPolsatProfile=profile;
+// On the first live attempt avoid interrupting provider startup at DOMContentLoaded.
+// Recovery and other playback modes retain the established session bootstrap.
+try{
+ const key='tvPlayerBootstrapReload';
+ const previous=sessionStorage.getItem(key);
+ const early=nonce+':early';
+ if(previous===early){
+  window.__tvpPolsatReloadDecision='wczytano po przeładowaniu przed startem strony';
+ }else if(previous!==nonce){
+  sessionStorage.setItem(key,live&&!matches?early:nonce);
+  if(live&&matches){
+   window.__tvpPolsatReloadDecision='zgodna sesja, pominięto przeładowanie';
+  }else if(live){
+   location.reload();
+  }else{
+   const refresh=()=>location.reload();
+   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',refresh,{once:true});
+   else setTimeout(refresh,0);
+  }
+ }
+}catch(_){/* Storage unavailable: do not create a reload loop. */}
+})();"""%(json.dumps(cookies,ensure_ascii=True),json.dumps(record['profile']['id']),json.dumps(uuid.uuid4().hex),json.dumps(reuse_live_session))

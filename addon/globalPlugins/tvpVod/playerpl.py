@@ -21,8 +21,17 @@ def identifier(value):return -int(hashlib.sha256(('playerpl:'+str(value)).encode
 def official_url(url):
     try:
         p=urlsplit(url)
-        return p.scheme=='https' and p.hostname=='player.pl' and not p.username and not p.password and p.port in (None,443)
+        return p.scheme=='https' and p.hostname=='player.pl' and p.username is None and p.password is None and p.port in (None,443)
     except (TypeError,ValueError):return False
+
+def login_url(url):
+    try:
+        parts = urlsplit(url)
+        return (parts.scheme == 'https' and parts.hostname in ('oauth.account.tvn.pl', 'account.tvn.pl')
+                and parts.username is None and parts.password is None and parts.port in (None, 443))
+    except (TypeError, ValueError):
+        return False
+
 def clear_cache():
     with _lock:_cache.clear()
 def api(resource,**params):

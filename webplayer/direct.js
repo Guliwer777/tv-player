@@ -2,6 +2,7 @@
 (() => {
   const video=document.getElementById('video'),status=document.getElementById('status');
   const send=message=>window.tvp_bridge.postMessage(JSON.stringify(message));
+  const audio=window.__tvpAudioGain || {set:(video,value)=>video.volume=Math.max(0,Math.min(1,Number(value)/100)),get:video=>video.volume*100};
   let player,config,loaded=false,audios=[],ended=false,pendingAudioId=null,timeBase=0;
   const pendingCommands=[];
   const diagnostic=message=>send({event:'player-diagnostic',message});
@@ -30,7 +31,7 @@
     if(name==='time-pos')return Math.max(0,safe(video.currentTime-timeBase));
     if(name==='duration')return config.isLive?Math.max(0,safe(player.seekRange().end-timeBase)):safe(video.duration);
     if(name==='pause')return video.paused;
-    if(name==='volume')return video.volume*100;
+    if(name==='volume')return audio.get(video);
     if(name==='track-list')return audioList();
     if(name==='aid')return audioList().find(t=>t.selected)?.id || null;
     throw new Error('unknown-property');
@@ -58,11 +59,22 @@
         const range=typeof player.seekRange==='function'?player.seekRange():{start:0,end:video.duration};
         video.currentTime=Math.max(range.start,Math.min(range.end,video.currentTime+Number(args[0])));
       }
-      else if(action==='cycle' && args[0]==='pause') {if(video.paused)await video.play();else video.pause();}
+      else if(action==='cycle' && args[0]==='pause') {
+        if(video.paused) {
+          await video.play();
+          await audio.resume?.(video);
+        } else video.pause();
+      }
       else if(action==='set_property') {
         const [name,value]=args;
-        if(name==='pause') {if(value)video.pause();else await video.play();}
-        else if(name==='volume')video.volume=Math.max(0,Math.min(1,Number(value)/100));
+        if(name==='pause') {
+          if(value)video.pause();
+          else {
+            await video.play();
+            await audio.resume?.(video);
+          }
+        }
+        else if(name==='volume')audio.set(video,value);
         else if(name==='aid') {
           audioList();const track=audios[Number(value)-1];
           if(!track)throw new Error('missing-audio');
@@ -125,11 +137,12 @@
         player.selectVariantTrack(config.quality==='min'?variants[0]:variants.at(-1),true);
       }
     }
-    video.volume=Math.max(0,Math.min(1,Number(config.volume)/100));
+    audio.set(video,config.volume);
     loaded=true;status.textContent='';
     diagnostic('Ładowanie zakończone — materiał gotowy.');
     send({event:'file-loaded'});
-    if(!config.pause)try{await video.play();}catch(error){
+    if(!config.pause)try{await video.play();await audio.resume?.(video);
+    }catch(error){
       if(error?.name==='NotAllowedError')send({event:'player-notice',message:'Materiał gotowy. Naciśnij Ctrl+Spacja, aby rozpocząć.'});
       else if(error?.name!=='AbortError')failure(error);
     }

@@ -45,6 +45,22 @@ class DirectServerTests(unittest.TestCase):
         self.assertEqual(result['manifest'],'https://cdn.example/live.m3u8')
         self.assertIn('videoType=LIVE',request.call_args.args[0].full_url)
 
+    def test_vod_playlist_pins_a_confirmed_delivery_redirect(self):
+        data=json.dumps({'sources':{'HLS':[{'src':'https://r.dcs.redcdn.pl/vod/film.m3u8'}]}}).encode()
+        with patch.object(server_module,'urlopen',return_value=Response('https://vod.tvp.pl/api/',data)),\
+             patch.object(server_module,'live_delivery_hosts',return_value=('https://n-1-2.dcs.redcdn.pl/vod/film.m3u8',{'r.dcs.redcdn.pl','n-1-2.dcs.redcdn.pl'})) as pinned:
+            result=server_module.playlist(123,'MOVIE')
+        pinned.assert_called_once_with('https://r.dcs.redcdn.pl/vod/film.m3u8')
+        self.assertEqual(result['deliveryHosts'],['n-1-2.dcs.redcdn.pl','r.dcs.redcdn.pl'])
+
+    def test_vod_keeps_its_manifest_when_preflight_redirect_is_not_recognised(self):
+        data=json.dumps({'sources':{'HLS':[{'src':'https://rr-merk3.cdn.tvp.pl/token/film.m3u8'}]}}).encode()
+        with patch.object(server_module,'urlopen',return_value=Response('https://vod.tvp.pl/api/',data)),\
+             patch.object(server_module,'live_delivery_hosts',side_effect=HTTPError('https://other.example',403,'unexpected',{},None)):
+            result=server_module.playlist(123,'MOVIE')
+        self.assertEqual(result['manifest'],'https://rr-merk3.cdn.tvp.pl/token/film.m3u8')
+        self.assertEqual(result['deliveryHosts'],[])
+
     def setUp(self):
         self.manifest='https://cdn.example/video/manifest.mpd'
         self.licence='https://vod.tvp.pl/licence?token=test'
@@ -96,5 +112,22 @@ class DirectServerTests(unittest.TestCase):
         policy=server_module.RestrictedRedirect(hosts)
         with self.assertRaises(HTTPError):
             policy.redirect_request(Request(node),None,302,'redirect',{},'https://n-99-99.dcs.redcdn.pl/live/channel.livx')
+
+    def test_hls_manifest_pins_its_single_orange_cdn_redirect(self):
+        manifest='https://rr-merk3.cdn.tvp.pl/token/channel/master.m3u8'
+        redirect='https://redir.v4.cache.orange.pl/tvp/channel/master.m3u8'
+        node='https://ec03-szz2.v4.cache.orange.pl/tvp/channel/master.m3u8'
+        def opener(policy):
+            policy.redirect_request(Request(manifest),None,302,'redirect',{},redirect)
+            policy.redirect_request(Request(redirect),None,302,'redirect',{},node)
+            for bad in ('https://evil.example/channel','http://ec03-szz2.v4.cache.orange.pl/channel','https://other.cache.orange.pl/channel'):
+                with self.assertRaises(HTTPError):policy.redirect_request(Request(manifest),None,302,'redirect',{},bad)
+            class Opener:
+                def open(self,*args,**kwargs):return Response(node,b'#EXTM3U')
+            return Opener()
+        with patch.object(server_module,'build_opener',side_effect=opener):
+            resolved,hosts=server_module.live_delivery_hosts(manifest)
+        self.assertEqual(resolved,node)
+        self.assertEqual(hosts,{'rr-merk3.cdn.tvp.pl','redir.v4.cache.orange.pl','ec03-szz2.v4.cache.orange.pl'})
 
 if __name__=='__main__':unittest.main()

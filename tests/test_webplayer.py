@@ -2,11 +2,13 @@ import importlib
 import io
 import json
 import math
+import os
 import queue
 import subprocess
 from pathlib import Path
 import sys
 import threading
+import tempfile
 import types
 import unittest
 from unittest.mock import patch
@@ -16,6 +18,30 @@ package.__path__ = [str(Path(__file__).resolve().parents[1] / 'addon/globalPlugi
 backend = importlib.import_module('tvpVod.player')
 web = importlib.import_module('tvpVod.webPlayer')
 catalog = importlib.import_module('tvpVod.catalog')
+
+class AutoplayTests(unittest.TestCase):
+    def test_host_autoplay_policy_is_scoped_and_preserves_existing_flags(self):
+        key='WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS'
+        allow='--autoplay-policy=no-user-gesture-required'
+        explicit='--autoplay-policy=user-gesture-required'
+        cases=[
+            ('https://vod.tvp.pl/test,1','MOVIE','--mute-audio','--mute-audio '+allow),
+            ('https://vod.tvp.pl/test,1','LIVE',explicit,explicit),
+            ('https://player.pl/seriale/test','MOVIE','',allow),
+            ('https://polsatboxgo.pl/kanaly-tv/test','LIVE','',allow),
+            ('https://polsatboxgo.pl/wideo/test','MOVIE','',allow),
+            ('https://polsatboxgo.pl/wideo/test','MOVIE',explicit,explicit),
+            ('https://www.canalplus.com/pl/','LIVE','',''),
+        ]
+        with tempfile.TemporaryDirectory() as folder:
+            globals_stub=types.SimpleNamespace(appArgs=types.SimpleNamespace(configPath=folder))
+            for url,kind,initial,expected in cases:
+                with self.subTest(url=url,kind=kind), patch.dict(sys.modules,{'globalVars':globals_stub}), \
+                        patch.dict(os.environ,{key:initial}), patch('tvpVod.playerpl_api.current_record',return_value=None), \
+                        patch.object(web.threading,'Thread'), patch.object(web.subprocess,'Popen') as launch:
+                    web.WebPlayer(0,lambda event:None,backend.OfficialSource(url,kind),direct=True)
+                    self.assertEqual(launch.call_args.kwargs['env'].get(key,''),expected)
+
 
 class ShutdownTests(unittest.TestCase):
     def test_quit_is_written_before_pipe_closes_and_process_exits_normally(self):

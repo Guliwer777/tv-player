@@ -2,7 +2,7 @@ const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/st
 (async()=>{
  const events=[],handlers={},network={registerScheme(scheme,plugin){assert.equal(scheme,'https');this.plugin=plugin;},PluginPriority:{APPLICATION:3}};
  let tick,configuration;
- const video={currentTime:0,duration:8842.661,volume:1,paused:true,addEventListener(n,f){handlers[n]=f;},play(){this.paused=false;return Promise.resolve();},pause(){this.paused=true;}};
+ const video={currentTime:0,duration:8842.661,volume:1,muted:false,paused:true,addEventListener(n,f){handlers[n]=f;},play(){this.paused=false;return Promise.resolve();},pause(){this.paused=true;}};
  const tracks=[{id:20,active:true,language:'pl'},{id:99,active:false,language:'pl',label:'Audiodeskrypcja',roles:['description']}];
  class Player{
   attach(){return Promise.resolve();}addEventListener(){}getNetworkingEngine(){return network;}
@@ -29,7 +29,7 @@ const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/st
  await context.window.__tvpCommand({command:['get_property','time-pos'],request_id:999});
  assert.ok(!events.some(e=>e.event==='player-error' && /loading/.test(e.message)));
  await new Promise(setImmediate);tick();
- assert.equal(video.volume,.35);
+ assert.equal(video.volume,.35);assert.equal(video.muted,false);
  assert.equal(video.currentTime,125.375);assert.equal(video.paused,false);
  assert.equal(configuration.abr.restrictions.maxBandwidth,800000);
  assert.ok(events.some(e=>e.event==='file-loaded'));
@@ -53,5 +53,15 @@ const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/st
  await context.window.__tvpCommand({command:['get_property','time-pos'],request_id:7401});assert.equal(events.at(-1).data,110);
  await context.window.__tvpCommand({command:['get_property','duration'],request_id:7402});assert.equal(events.at(-1).data,120);
  await context.window.__tvpCommand({command:['seek',100]});assert.equal(video.currentTime,10120);
+ // A WebView that permits sound must still honor a bookmark saved for paused startup.
+ let plays=0;
+ video.paused=true;
+ video.play=async()=>{plays++;video.paused=false;};
+ context.fetch=async()=>({json:async()=>({manifest:remote,isLive:true,volume:70,pause:true,quality:'auto'})});
+ vm.runInNewContext(fs.readFileSync(require('node:path').join(__dirname,'../webplayer/direct.js'),'utf8'),context);
+ await new Promise(setImmediate);
+ assert.equal(plays,0);assert.equal(video.paused,true);
+ await context.window.__tvpCommand({command:['cycle','pause']});
+ assert.equal(plays,1);assert.equal(video.paused,false);assert.equal(video.muted,false);
  console.log('PASS: direct EME bridge resume, pause, seek, audio, quality, routing and live window bounds');
 })().catch(e=>{console.error(e);process.exitCode=1;});

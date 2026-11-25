@@ -32,7 +32,8 @@ def request(resource,params=None,data=None,record=None,oauth=False,form=False,ja
         headers.update({'API-Authentication':record['access_token'],'API-DeviceUid':record['device'],'API-SubscriberHash':record['user_hash'],'API-SubscriberPub':record['user_pub']})
         if record.get('profile'):headers['API-ProfileUid']=record['profile']['id']
         cookies=record.get('cookies',{})
-        headers['Cookie']='; '.join(k+'='+v for k,v in cookies.items() if all(c not in v for c in ('\r','\n',';')))
+        if cookies:
+            headers['Cookie']='; '.join(k+'='+v for k,v in cookies.items() if all(c not in v for c in ('\r','\n',';')))
     body=None
     if data is not None:
         body=(urlencode(data) if form else json.dumps(data)).encode('utf-8');headers['Content-Type']='application/x-www-form-urlencoded' if form else 'application/json'
@@ -75,7 +76,11 @@ def expiry_time(token):
 
 def login_record(record):
     selected=record.get('profile');jar=CookieJar()
-    response=request('subscriber/login/token',data={'agent':'browser','agentVersion':'Mozilla/5.0','appVersion':'1','maker':'Microsoft','os':'Windows','osVersion':'10','token':record['access_token'],'uid':record['device']},record=record,jar=jar)
+    # Exchange the current OAuth credential for a fresh website session. Sending
+    # the previous website session here can make the server reuse it instead.
+    uid = record.get('cookies', {}).get('uid') or record['uid']
+    login_context = dict(record, cookies={'uid': uid})
+    response=request('subscriber/login/token',data={'agent':'browser','agentVersion':'Mozilla/5.0','appVersion':'1','maker':'Microsoft','os':'Windows','osVersion':'10','token':record['access_token'],'uid':record['device']},record=login_context,jar=jar)
     profile=response.get('profile') or {}
     if response.get('active') is not True or not profile.get('externalUid'):raise PlayerError('Player nie potwierdził konta i profilu. Połącz konto ponownie.')
     record['profile']={'id':str(profile['externalUid']),'name':str(profile.get('name') or 'Profil potwierdzony przez Player')}
@@ -95,8 +100,10 @@ def refresh(force=True):
     with REFRESH_LOCK:
         record=account.load()
         if not record:raise PlayerError('Najpierw połącz konto Player.')
-        if not force and record.get('expires_at',0)>time.time()+30:return record
+        # Player rejects an early refresh with "Token is still valid".
+        if not force and record.get('expires_at',0)>time.time():return record
         original=(record['uid'],record['refresh_token'])
+        original_profile=record.get('profile')
         token=request('token',data={'grant_type':'refresh_token','refresh_token':record['refresh_token'],'client_id':CLIENT},oauth=True,form=True)
         for key in ('access_token','refresh_token','user_hash','user_pub'):
             if key in token:record[key]=token[key]
@@ -105,9 +112,15 @@ def refresh(force=True):
         with account.LOCK:
             latest=account.load()
             if not latest or (latest['uid'],latest['refresh_token'])!=original:raise PlayerError('Konto Player zmieniło się podczas odświeżania. Spróbuj ponownie.')
+            # The user may have picked a confirmed profile while the token
+            # request was in flight. Keep both their choice and the new token.
+            if latest.get('profile') and latest['profile'] != original_profile:
+                record['profile'] = latest['profile']
+                profile_id = latest['profile']['id']
+                record['cookies'].update(profile_uid=profile_id, samuid=profile_id)
             account.save(record)
         return record
 
 def current_record():
     record=account.load()
-    return refresh(force=False) if record and record.get('expires_at',0)<=time.time()+30 else record
+    return refresh(force=False) if record and record.get('expires_at',0)<=time.time() else record
