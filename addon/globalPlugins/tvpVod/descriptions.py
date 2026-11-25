@@ -3,9 +3,12 @@ from collections import OrderedDict
 import threading
 from .catalog import material_description
 
+NO_DESCRIPTION = 'Dostawca nie udostępnił opisu tej pozycji.'
+
 class DescriptionLoader:
-    def __init__(self,deliver):
+    def __init__(self,deliver,*,describe=None):
         self.deliver=deliver
+        self.describe=describe
         self.condition=threading.Condition()
         self.pending=None
         self.stopped=False
@@ -33,13 +36,15 @@ class DescriptionLoader:
                 self.pending=None
             key=(material.kind,material.id)
             try:
-                if key in self.cache:
+                if self.describe is not None:
+                    text=self.describe(material)
+                elif key in self.cache:
                     text=self.cache[key];self.cache.move_to_end(key)
                 else:
                     text=material_description(material)
                     self.cache[key]=text
                     if len(self.cache)>256:self.cache.popitem(last=False)
-                text=text or 'TVP nie udostępnia opisu tego materiału.'
+                text=text or NO_DESCRIPTION
             except Exception:
                 text=material.description or 'Nie udało się pobrać opisu. Wybierz materiał ponownie, aby ponowić próbę.'
             with self.condition:

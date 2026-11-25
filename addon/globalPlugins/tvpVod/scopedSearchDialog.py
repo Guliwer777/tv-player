@@ -1,12 +1,15 @@
 """Accessible scope search; workers never touch wx or playback."""
 import threading
+import weakref
 import wx
 import ui
-from . import scopedSearch
+from . import liveGuide,scopedSearch
 from .planningShortcuts import mode as planning_mode,schedule as schedule_shortcut
 from .catalog import Folder
 from .canal_epg import line
 from .accessibility import route_player_shortcut
+from .descriptions import DescriptionLoader,NO_DESCRIPTION
+from .programmeFormat import DEFAULT
 
 
 class SearchDialog(wx.Dialog):
@@ -14,16 +17,28 @@ class SearchDialog(wx.Dialog):
         super().__init__(owner,title='Wyszukaj w: '+title,size=(850,620))
         self.owner=owner;self.folder=folder;self.source_rows=list(rows)
         self.alive=True;self.busy=False;self.loaded=False;self.rows=[];self.visible=[]
+        self.submitted_keyword=None
+        self.description=None;self.description_timer=None;self.description_loader=None;self.description_token=0
         self.stop=threading.Event();self.failed=0
         layout=wx.BoxSizer(wx.VERTICAL)
         layout.Add(wx.StaticText(self,label='Zakres: '+title+'. Wpisz tytuł programu lub nazwę kanału.'),0,wx.ALL,8)
         self.query=wx.TextCtrl(self,name='Wyszukaj w bieżącym zakresie');layout.Add(self.query,0,wx.EXPAND|wx.ALL,8)
         self.query.Bind(wx.EVT_TEXT,self.filter)
         self.button=wx.Button(self,label='Wyszukaj');self.button.Bind(wx.EVT_BUTTON,self.search);layout.Add(self.button,0,wx.ALL,8)
-        self.status=wx.StaticText(self,label='Ramówki zostaną pobrane po wybraniu Wyszukaj. Pierwsze pobranie wielu stacji może potrwać kilka minut.')
+        source='Wyniki są pobierane z katalogu wybranej usługi.' if scopedSearch.searchable_catalogue(folder) else 'Ramówki zostaną pobrane po wybraniu Wyszukaj. Pierwsze pobranie wielu stacji może potrwać kilka minut.'
+        self.status=wx.StaticText(self,label=source)
         layout.Add(self.status,0,wx.EXPAND|wx.ALL,8)
         self.list=wx.ListBox(self,name='Wyniki wyszukiwania');layout.Add(self.list,1,wx.EXPAND|wx.ALL,8)
         self.list.Bind(wx.EVT_CONTEXT_MENU,self.context)
+        if folder and folder.kind in ('POLSAT','PLAYERPL'):
+            layout.Add(wx.StaticText(self,label='&Opis:'),0,wx.LEFT,8)
+            self.description=wx.TextCtrl(self,style=wx.TE_MULTILINE|wx.TE_READONLY,name='Opis')
+            layout.Add(self.description,1,wx.EXPAND|wx.ALL,8)
+            order=owner.store.settings.get('programmeOrder',DEFAULT)
+            self.description_loader=DescriptionLoader(
+                lambda token,text:wx.CallAfter(self.complete_description,token,text),
+                describe=lambda item:liveGuide.current_description(item,order))
+            self.list.Bind(wx.EVT_LISTBOX,self.update_description)
         actions=wx.BoxSizer(wx.HORIZONTAL)
         for label,mode in [('Przypomnij o rozpoczęciu (Ctrl+R)','notify'),('Odtwórz automatycznie (Ctrl+Shift+R)','play')]:
             button=wx.Button(self,label=label)
@@ -40,6 +55,8 @@ class SearchDialog(wx.Dialog):
             schedule_shortcut(self.owner,self.selected(),planning_mode(event))
         elif code==wx.WXK_F5:self.search(force=True)
         elif code==wx.WXK_ESCAPE:self.Close()
+        elif code==wx.WXK_BACK and self.FindFocus()==self.list and not event.ControlDown() and not event.AltDown():
+            self.Close()
         elif code==getattr(wx,'WXK_WINDOWS_MENU',-1) or code==wx.WXK_F10 and event.ShiftDown():
             if self.FindFocus()==self.list:self.context(None)
             else:event.Skip()
@@ -51,48 +68,164 @@ class SearchDialog(wx.Dialog):
         elif not route_player_shortcut(self.owner,event):event.Skip()
 
     def search(self,event=None,force=False):
-        if self.busy:return
-        if not self.query.GetValue().strip():ui.message('Wpisz szukany tytuł lub kanał.');return
-        if self.loaded and not force:self.filter();self.list.SetFocus();return
-        self.busy=True;self.button.Disable();self.status.SetLabel('Pobieranie listy stacji i ramówek…')
-        def progress(done,total,rows,failed):wx.CallAfter(self.progress,done,total,rows,failed)
+        keyword = self.query.GetValue()
+        if not keyword.strip():ui.message('Wpisz szukany tytuł lub kanał.');return
+        polsat = scopedSearch.polsat_catalogue(self.folder)
+        same_query = self.submitted_keyword == keyword
+        if self.busy:
+            if not polsat or (same_query and not force):
+                return
+            self.stop.set()
+        if self.loaded and not force and (not polsat or same_query):
+            self.filter()
+            if self.visible or not polsat:
+                self.list.SetFocus()
+            return
+        if polsat:
+            self.rows = []
+            self.filter()
+        self.submitted_keyword = keyword
+        self.stop = stop = threading.Event()
+        self.loaded=False;self.busy=True;self.button.Disable()
+        self.status.SetLabel('Przeszukiwanie katalogu usługi…' if scopedSearch.searchable_catalogue(self.folder) else 'Pobieranie listy stacji i ramówek…')
+        def progress(done,total,rows,failed):
+            wx.CallAfter(self.progress,done,total,rows,failed,keyword,stop)
         def worker():
             try:
-                rows,failed=scopedSearch.collect(self.folder,self.source_rows,self.stop,progress,force=force);error=''
+                rows,failed=scopedSearch.collect(self.folder,self.source_rows,stop,progress,force=force,keyword=keyword);error=''
             except Exception:rows=[];failed=0;error='Nie udało się pobrać danych tego zakresu. Możesz ponowić wyszukiwanie.'
-            wx.CallAfter(self.complete,rows,failed,error)
+            wx.CallAfter(self.complete,rows,failed,error,keyword,stop)
         threading.Thread(target=worker,daemon=True).start()
 
-    def progress(self,done,total,rows,failed):
-        if not self.alive:return
-        self.rows=rows;self.failed=failed;self.filter()
-        self.status.SetLabel(f'Pobrano {done} z {total} stacji. Brak danych lub błąd: {failed}. Wyniki są częściowe do zakończenia pobierania.')
+    def progress(self,done,total,rows,failed,keyword,stop):
+        if not self.alive or stop.is_set():return
+        had_results = bool(self.visible)
+        polsat = scopedSearch.polsat_catalogue(self.folder)
+        self.rows=rows;self.failed=failed;self.filter(append=polsat)
+        if polsat:
+            self.status.SetLabel(f'Wyniki: {len(self.visible)}. Pobieranie kolejnych…')
+            if not had_results:
+                self.focus_results(keyword)
+            return
+        if total:
+            self.status.SetLabel(f'Pobrano {done} z {total} stacji. Brak danych lub błąd: {failed}. Wyniki są częściowe do zakończenia pobierania.')
+        else:self.status.SetLabel(f'Przeszukano {done} części katalogu. Wyniki pojawią się po zakończeniu.')
 
-    def complete(self,rows,failed,error):
-        if not self.alive:return
-        self.rows=rows;self.failed=failed;self.loaded=not bool(error);self.busy=False;self.button.Enable();self.filter()
-        self.status.SetLabel(error or f'Zakończono. Wyników: {len(self.visible)}. Stacje bez ramówki lub z błędem: {failed}. Zakres do siedmiu dni, według danych dostawcy.')
-        ui.message(error or f'Wyszukiwanie zakończone. Wyników: {len(self.visible)}. Stacje bez danych: {failed}.')
-        # Keep typing/focus intact while the background download completes.
+    def complete(self,rows,failed,error,keyword,stop):
+        if not self.alive or stop.is_set():return
+        polsat = scopedSearch.polsat_catalogue(self.folder)
+        had_results = polsat and bool(self.visible)
+        if polsat and error and self.rows:
+            rows = self.rows
+            error = 'Pobrano część wyników Polsat Box Go. Naciśnij F5, aby ponowić.'
+        self.rows=rows;self.failed=failed;self.loaded=not bool(error);self.busy=False;self.button.Enable()
+        self.filter(append=polsat)
+        if scopedSearch.searchable_catalogue(self.folder):
+            message=error or f'Zakończono. Wyników: {len(self.visible)}.'
+            spoken=error or f'Wyszukiwanie zakończone. Wyników: {len(self.visible)}.'
+        else:
+            message=error or f'Zakończono. Wyników: {len(self.visible)}. Stacje bez ramówki lub z błędem: {failed}. Zakres do siedmiu dni, według danych dostawcy.'
+            spoken=error or f'Wyszukiwanie zakończone. Wyników: {len(self.visible)}. Stacje bez danych: {failed}.'
+        self.status.SetLabel(message)
+        if not error and not had_results:
+            self.focus_results(keyword)
+        if not polsat or self.IsActive():
+            ui.message(spoken)
 
-    def filter(self,event=None):
+    def focus_results(self, keyword):
+        if (
+            self.visible
+            and self.folder
+            and self.folder.kind in ('POLSAT', 'PLAYERPL')
+            and self.IsActive()
+            and self.FindFocus() in (self.query, self.button)
+            and self.query.GetValue() == keyword
+        ):
+            self.list.SetFocus()
+
+    def filter(self,event=None,*,append=False):
+        previous = self.visible
         selected=self.selected()
         self.visible=scopedSearch.matching(self.rows,self.query.GetValue())
         def label(row):
             if 'start' not in row:return row['material'].label
             from .programmeFormat import event_label,DEFAULT,channel_name
             return event_label(row,channel_name(row['material']),self.owner.store.settings.get('programmeOrder',DEFAULT))
+        if append and previous and self.visible[:len(previous)] == previous:
+            added = self.visible[len(previous):]
+            if added:
+                self.list.AppendItems([label(row) for row in added])
+            return
         self.list.Set([label(row) for row in self.visible])
         if self.visible:self.list.SetSelection(self.visible.index(selected) if selected in self.visible else 0)
+        self.update_description()
 
     def selected(self):
         index=self.list.GetSelection()
         return self.visible[index] if 0<=index<len(self.visible) else None
 
+    def update_description(self,event=None):
+        if self.description is None:
+            return
+        if self.description_timer is not None:
+            self.description_timer.Stop()
+            self.description_timer=None
+        self.description_token+=1
+        row=self.selected()
+        if not row:
+            self.description.Clear()
+            return
+        item=row['material']
+        if 'start' in row:
+            order=self.owner.store.settings.get('programmeOrder',DEFAULT)
+            text=liveGuide.description(dict(row,detail_url=None),order)
+        elif item.kind in ('POLSAT_LIVE','PLAYERPL_LIVE') and not item.description.startswith('Teraz: '):
+            text=item.description.strip() or 'Pobieranie opisu bieżącej audycji…'
+            self.description_timer=wx.CallLater(250,self.description_loader.request,item,self.description_token)
+        else:
+            text=item.description.strip() or NO_DESCRIPTION
+        self.description.ChangeValue(text)
+        self.description.SetInsertionPoint(0)
+
+    def complete_description(self,token,text):
+        if not self.alive or token!=self.description_token:
+            return
+        self.description.ChangeValue(text)
+        self.description.SetInsertionPoint(0)
+        if self.IsActive() and self.FindFocus()==self.description:
+            ui.message(text)
+
     def schedule(self,mode):
         row=self.selected()
         if row and 'start' in row:self.owner.schedule_event(row['material'],row,mode)
         else:ui.message('Wybierz audycję z określonym terminem.')
+
+    def results_frame(self):
+        items = [row['material'] for row in self.visible]
+        heading = 'Wyniki wyszukiwania: ' + self.query.GetValue().strip()
+        return items, None, 0, heading, self.list.GetSelection()
+
+    def play_result(self, row):
+        material = row['material']
+        context = self.owner.navigation_context()
+        if 'start' not in row:
+            from .state import pack_frame
+            context['history'].append(context['current'])
+            context['current'] = pack_frame(*self.results_frame())
+        self.owner.on_play(material, navigation_context=context)
+        playback = self.owner.playback
+        if playback and playback.alive and (playback.material.kind, playback.material.id) == (material.kind, material.id):
+            playback.search_origin = (weakref.ref(self), row)
+
+    def focus_result(self, row):
+        if not self.alive or row not in self.visible:
+            return False
+        self.list.SetSelection(self.visible.index(row))
+        self.update_description()
+        self.Show()
+        self.Raise()
+        self.list.SetFocus()
+        return True
 
     def activate(self):
         row=self.selected()
@@ -100,10 +233,12 @@ class SearchDialog(wx.Dialog):
         if 'start' in row:self.context(None);return
         material=row['material']
         if isinstance(material,Folder):
-            self.owner.remember();self.owner.current_folder=material;self.owner.offset=0;self.owner.heading=material.title
+            self.owner.remember()
+            self.owner.history.append(self.results_frame())
+            self.owner.current_folder=material;self.owner.offset=0;self.owner.heading=material.title
             from .catalog import browse
             self.owner.run_task(lambda:browse(material));self.Close()
-        else:self.owner.on_play(material)
+        else:self.play_result(row)
 
     def context(self,event):
         row=self.selected();menu=wx.Menu()
@@ -114,7 +249,7 @@ class SearchDialog(wx.Dialog):
         if row:
             action('Dodaj do ulubionych',lambda:self.owner.add_favorite(row['material']))
             if row['material'].kind in ('CANAL_LIVE','POLSAT_LIVE','PLAYERPL_LIVE') or row['material'].kind=='LIVE' and not row['material'].start:
-                action('Odtwórz kanał teraz',lambda:self.owner.on_play(row['material']))
+                action('Odtwórz kanał teraz',lambda:self.play_result(row))
             if 'start' in row:
                 action('Przypomnij o rozpoczęciu (Ctrl+R)',lambda:self.schedule('notify'))
                 action('Odtwórz automatycznie (Ctrl+Shift+R)',lambda:self.schedule('play'))
@@ -123,7 +258,12 @@ class SearchDialog(wx.Dialog):
         finally:menu.Destroy()
 
     def destroyed(self,event):
-        if event.GetEventObject() is self:self.alive=False;self.stop.set()
+        if event.GetEventObject() is self:
+            self.alive=False;self.stop.set()
+            if self.description_timer is not None:
+                self.description_timer.Stop()
+            if self.description_loader is not None:
+                self.description_loader.close()
         event.Skip()
 
     def close(self,event):

@@ -7,11 +7,11 @@ import time
 from datetime import datetime,timedelta,timezone
 from urllib.parse import urlsplit,quote,urlencode
 try:
-    from .catalog import Folder,Material,CatalogError,plain_text
+    from .catalog import Folder,Material,CatalogError,description_from,plain_text,search_rank
     from .playerpl_api import request,PlayerError
     from . import playerpl_account as account
 except ImportError:
-    from catalog import Folder,Material,CatalogError,plain_text
+    from catalog import Folder,Material,CatalogError,description_from,plain_text,search_rank
     from playerpl_api import request,PlayerError
     import playerpl_account as account
 
@@ -59,7 +59,7 @@ def material(row):
         url=HOME+prefix+slug(category['slug'])+','+str(int(category['id']))+'/'+slug(serial['slug'])+'-odcinki,'+str(int(serial['id']))+'/odcinek-'+str(number)+',S'+str(sn).zfill(2)+'E'+str(number).zfill(2)+','+str(mid)
     else:url=HOME+prefix+slug(category['slug'])+','+str(int(category['id']))+'/'+slug(row.get('slug') or title)+','+str(mid)
     if not title:raise ValueError()
-    description=plain_text(row.get('description') or row.get('lead',''))
+    description=description_from(row)
     description+='\n'+('Według katalogu materiał wymaga płatnego dostępu. Uprawnienia konta sprawdza odtwarzacz.' if row.get('payable') else 'Katalog nie oznacza materiału jako płatnego. Logowanie i ostateczne uprawnienia sprawdza odtwarzacz.')
     return Material(identifier(mid),title,description.strip(),url,'PLAYERPL_LIVE' if kind=='LIVE' else 'PLAYERPL',row.get('payable') is True,provider_id=str(mid),
                     episode_number=int(row['episode']) if kind=='EPISODE' else 0,
@@ -74,10 +74,24 @@ def parse_items(rows):
         try:
             if row.get('type')=='SERIAL':
                 mid=int(row['id']);title=plain_text(row['title'])
-                if mid>0 and title:out.append(Folder(identifier(mid),title,'PLAYERPL','serial:'+str(mid),plain_text(row.get('description') or row.get('lead',''))))
+                if mid>0 and title:out.append(Folder(identifier(mid),title,'PLAYERPL','serial:'+str(mid),description_from(row)))
             elif row.get('type') in ('VOD','EPISODE','LIVE'):out.append(material(row))
         except (KeyError,TypeError,ValueError):continue
     return out
+
+
+def search(keyword):
+    """Search Player's official VOD and live endpoints without crawling menus."""
+    keyword=plain_text(keyword).strip()
+    if len(keyword)<2:raise CatalogError('Wpisz co najmniej dwa znaki.')
+    results=[];seen=set()
+    for resource in ('product/vod/search','product/live/search'):
+        payload=api(resource,keyword=keyword,episodes='true',maxResults=50,firstResult=0)
+        if not isinstance(payload,dict) or not isinstance(payload.get('items'),list):
+            raise CatalogError('Nieprawidłowa odpowiedź wyszukiwarki Playera.')
+        for item in parse_items(payload['items']):
+            if item.id not in seen:seen.add(item.id);results.append(item)
+    return sorted(results,key=lambda item:search_rank(item,keyword))
 
 def warsaw_time(value):
     """Provider's naive dates are Warsaw wall time, regardless of computer timezone.
@@ -97,7 +111,7 @@ def epg_rows(payload,now=None):
         try:
             start=warsaw_time(row['since']);end=warsaw_time(row['till'])
             if end<=start or end<=now:continue
-            out.append({'title':plain_text(row.get('title','Audycja')),'start':start,'end':end,'subtitle':'','description':plain_text(row.get('description','')),'replay_available':False})
+            out.append({'title':plain_text(row.get('title','Audycja')),'start':start,'end':end,'subtitle':'','description':description_from(row),'replay_available':False})
         except (KeyError,TypeError,ValueError):continue
     return sorted(out,key=lambda r:r['start'])
 
@@ -131,6 +145,21 @@ def programmes(item,stop):
     if stop.is_set():return []
     with _lock:_cache[key]=(time.monotonic(),rows)
     return [row for row in rows if row['end']>now]
+
+
+def current_programme(item):
+    if not item.provider_id.isdigit() or not official_url(item.url):
+        raise CatalogError('Niepoprawny kanał Playera.')
+    now = datetime.now(timezone.utc)
+    payload = api('product/live/epg/list', **{'liveId[]':item.provider_id,
+        'since':int((now-timedelta(hours=6)).timestamp()*1000),
+        'till':int((now+timedelta(hours=1)).timestamp()*1000)})
+    if not isinstance(payload,list):
+        raise CatalogError('Nieznana ramówka Playera.')
+    station_rows = [row for row in payload if isinstance(row,dict)
+                    and isinstance(row.get('live'),dict)
+                    and str(row['live'].get('id')) == item.provider_id]
+    return next((row for row in epg_rows(station_rows,now) if row['start'] <= now < row['end']),None)
 
 
 def channels():

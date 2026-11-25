@@ -260,6 +260,14 @@ class PlaybackDialog(wx.Dialog):
         if home:
             parent.go_home()
         else:
+            origin = getattr(self, 'search_origin', None)
+            if origin:
+                search_ref, row = origin
+                search = search_ref()
+                result = row['material']
+                if (search is not None and (result.kind, result.id) == (self.material.kind, self.material.id)
+                        and search.focus_result(row)):
+                    return
             parent.restore_playback_context(self)
         parent.Raise()
 

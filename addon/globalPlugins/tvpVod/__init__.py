@@ -11,7 +11,7 @@ import inputCore
 from scriptHandler import script, getLastScriptRepeatCount
 
 from .catalog import CatalogError, Folder, Material, browse, categories, search, series_folder, following_episode
-from .descriptions import DescriptionLoader
+from .descriptions import DescriptionLoader, NO_DESCRIPTION
 from .playbackDialog import PlaybackDialog
 from .state import Store, MenuEntry, BookmarkEntry, pack_frame, unpack_frame, decode
 from .settingsDialog import SettingsDialog
@@ -49,7 +49,7 @@ class CatalogDialog(wx.Dialog):
         self.epg.Bind(wx.EVT_BUTTON,self.open_epg);self.epg.Hide()
         layout.Add(self.epg,0,wx.ALL,8)
         layout.Add(wx.StaticText(self, label="&Opis:"), 0, wx.LEFT, 8)
-        self.description = wx.TextCtrl(self, style=wx.TE_MULTILINE | wx.TE_READONLY)
+        self.description = wx.TextCtrl(self, style=wx.TE_MULTILINE | wx.TE_READONLY, name="Opis")
         layout.Add(self.description, 1, wx.EXPAND | wx.ALL, 8)
         from .guidePanel import GuidePanel
         self.guide=GuidePanel(self,self,self.description.ChangeValue);self.guide.Hide()
@@ -65,14 +65,14 @@ class CatalogDialog(wx.Dialog):
             'tvp-account-menu': [MenuEntry('Logowanie','account')],
             'canal-menu': [MenuEntry('Telewizja na żywo','canal-live'),MenuEntry('Katalog','canal'),MenuEntry('Konto i logowanie','canal-account-menu')],
             'canal-account-menu': [MenuEntry('Logowanie i łączenie konta','canal-account'),MenuEntry('Wybór profilu','canal-profile'),MenuEntry('Wyloguj / odłącz konto','canal-disconnect')],
-            'polsat-menu': [MenuEntry('Telewizja na żywo','polsat-live'),MenuEntry('Katalog','polsat'),MenuEntry('Konto i logowanie','polsat-account-menu')],
+            'polsat-menu': [MenuEntry('Telewizja na żywo','polsat-live'),MenuEntry('Katalog','polsat'),MenuEntry('Wyszukaj','polsat-search'),MenuEntry('Konto i logowanie','polsat-account-menu')],
             'polsat-account-menu': [MenuEntry('Logowanie i łączenie konta','polsat-account'),MenuEntry('Wybór profilu','polsat-profile'),MenuEntry('Wyloguj / odłącz konto','polsat-disconnect')],
-            'playerpl-menu': [MenuEntry('Telewizja na żywo','playerpl-live'),MenuEntry('Katalog','playerpl'),MenuEntry('Konto i logowanie','playerpl-account-menu')],
+            'playerpl-menu': [MenuEntry('Telewizja na żywo','playerpl-live'),MenuEntry('Katalog','playerpl'),MenuEntry('Wyszukaj','playerpl-search'),MenuEntry('Konto i logowanie','playerpl-account-menu')],
             'playerpl-account-menu': [MenuEntry('Logowanie i łączenie konta','playerpl-account'),MenuEntry('Wybór profilu','playerpl-profile'),MenuEntry('Wyloguj / odłącz konto','playerpl-disconnect')],
         }
         self.home_items = [
             MenuEntry("TVP VOD", "tvp-menu", "Kategorie, wyszukiwanie i konto TVP VOD."),
-            MenuEntry("TVP Sport — transmisje", "sport", "Trwające i nadchodzące wydarzenia z sport.tvp.pl."),
+            MenuEntry("TVP Sport — transmisje", "sport", "Trwające i nadchodzące wydarzenia z sport.tvp.pl. Ctrl+F wyszukuje transmisje."),
             MenuEntry("CANAL+", "canal-menu", "Katalog, kanały na żywo i konto CANAL+."),
             MenuEntry("Polsat Box Go", "polsat-menu", "Katalog, konto, wybór profilu i kanały na żywo Polsat Box Go."),
             MenuEntry('Player', 'playerpl-menu', 'Testowa obsługa katalogu, kanałów i konta Player.'),
@@ -278,6 +278,10 @@ class CatalogDialog(wx.Dialog):
                 self.run_task(lambda: ([f for f in categories() if not f.resource.startswith('products/lives')], False))
             elif item.action == "search":
                 self.on_search()
+            elif item.action in ('polsat-search','playerpl-search'):
+                provider={'polsat-search':('POLSAT','Polsat Box Go'),'playerpl-search':('PLAYERPL','Player')}[item.action]
+                from .scopedSearchDialog import SearchDialog
+                SearchDialog(self,Folder(0,provider[1],provider[0],'root'),[],provider[1]).Show()
             elif item.action == "account":
                 from .accountDialog import open_account
                 open_account(self)
@@ -605,10 +609,12 @@ class CatalogDialog(wx.Dialog):
             ui.message('Otworzono oficjalną stronę materiału. Dostęp lub pakiet możesz kupić w przeglądarce.')
         except (OSError,ValueError):ui.message('Nie udało się otworzyć oficjalnej strony materiału. Sprawdź wybór przeglądarki w ustawieniach.')
 
-    def on_play(self, material, resume_at=None, background=False,live_start=None,force=False):
+    def on_play(self, material, resume_at=None, background=False,live_start=None,force=False,navigation_context=None):
         if not self.alive:
             return
         if self.playback and self.playback.alive and self.playback.material.id == material.id and not getattr(self.playback,'purchase_pending',False) and resume_at is None and live_start is None and not force:
+            if navigation_context is not None:
+                self.playback.navigation_context.update(navigation_context)
             if not background:
                 self.playback.Show()
                 self.playback.Raise()
@@ -620,7 +626,7 @@ class CatalogDialog(wx.Dialog):
         self.generation += 1
         if self.playback and self.playback.alive:
             self.playback.stop_playback(notify=False)
-        context = self.navigation_context()
+        context = navigation_context if navigation_context is not None else self.navigation_context()
         from .playbackTitle import contextual
         display_title=contextual(material,context)
         self.playback = PlaybackDialog(self, material, store=self.store,
@@ -753,6 +759,16 @@ class CatalogDialog(wx.Dialog):
         if not self.alive or generation != self.generation:
             return
         count = len(results)
+        folder = self.current_folder
+        if not message and folder and folder.kind == "POLSAT" and folder.resource == "live:all":
+            from .polsat import all_channels_folder
+            self.current_folder = all_channels_folder(count)
+            self.heading = self.current_folder.label
+            if self.history:
+                parent_items, _, _, _, selection = self.history[-1]
+                if 0 <= selection < len(parent_items) and parent_items[selection] == folder:
+                    parent_items[selection] = self.current_folder
+            message = self.heading
         entries = list(results)
         if more:
             entries.append(MenuEntry("Następna strona", "next"))
@@ -784,9 +800,16 @@ class CatalogDialog(wx.Dialog):
             self.access_stop=threading.Event()
             self.access_timer=wx.CallLater(500,self.check_polsat_access,item,index,self.description_token,self.access_stop)
         if item is not None:
-            self.description.ChangeValue(item.description or ('Pobieranie opisu…' if isinstance(item,Material) else ''))
+            text = item.description
+            if not text:
+                if isinstance(item,Material):
+                    text = 'Pobieranie opisu…'
+                elif isinstance(item,Folder) and item.kind in ('POLSAT','PLAYERPL'):
+                    text = NO_DESCRIPTION
+            self.description.ChangeValue(text)
             if supported(item):
-                self.description.ChangeValue('Pobieranie programu i opisu bieżącej audycji…')
+                if not item.description or item.kind not in ('POLSAT_LIVE','PLAYERPL_LIVE'):
+                    self.description.ChangeValue('Pobieranie programu i opisu bieżącej audycji…')
                 self.description_timer=wx.CallLater(350,self.guide.load,item)
             elif isinstance(item,Material):
                 self.description_timer=wx.CallLater(350,self.description_loader.request,item,self.description_token)
@@ -826,7 +849,7 @@ class CatalogDialog(wx.Dialog):
         label=LABELS.get(status,LABELS['unknown'])
         updated=replace(item,access_status=label)
         self.results[index]=updated;self.list.SetString(index,self.item_label(updated))
-        self.description.ChangeValue(label.capitalize()+'.\n'+item.description)
+        self.description.ChangeValue(label.capitalize()+'.\n'+(item.description or NO_DESCRIPTION))
         if self.FindFocus()==self.list:ui.message(label)
 
     @staticmethod
