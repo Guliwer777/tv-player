@@ -1,6 +1,6 @@
 """Scope resolution and cancellable programme collection, independent of wx."""
 from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
-from .catalog import Folder, Material, CatalogError, browse
+from .catalog import Folder, Material, CatalogError, browse, normalize_title, search_rank
 
 
 def live_scope(folder):
@@ -97,7 +97,50 @@ def clear_station_cache(material):
         invalidate('tvp',channel)
 
 
-def collect(folder,rows,stop,progress,force=False):
+def catalogue_search(folder,keyword,stop,progress):
+    """Search the published catalogue tree without undocumented endpoints."""
+    query=normalize_title(keyword)
+    if len(query)<2:raise CatalogError('Wpisz co najmniej dwa znaki.')
+    if folder.kind=='CANAL':raise CatalogError('Wyszukiwanie nie jest dostępne dla CANAL+.')
+    if folder.kind=='POLSAT' and folder.resource=='root':
+        from .polsat import search
+        if stop.is_set():return []
+        return search(keyword)
+    if folder.kind=='PLAYERPL' and folder.resource=='root':
+        from .playerpl import search
+        if stop.is_set():return []
+        return search(keyword)
+    pending=[folder];visited=set();found=[];seen=set();scanned=0
+    while pending:
+        if stop.is_set():return []
+        current=pending.pop(0)
+        key=(current.kind,current.resource)
+        if key in visited:continue
+        visited.add(key)
+        if len(visited)>500:raise CatalogError('Katalog usługi jest zbyt rozbudowany, aby bezpiecznie przeszukać go jednorazowo.')
+        offset=0
+        while not stop.is_set():
+            items,more=browse(current,offset);scanned+=1
+            for item in items:
+                if isinstance(item,Folder):
+                    if item.resource!='live':pending.append(item)
+                elif isinstance(item,Material):
+                    title=normalize_title(item.title)
+                    if all(word in title for word in query.split()) and item.id not in seen:
+                        seen.add(item.id);found.append(item)
+            progress(scanned,0,[],0)
+            if not more:break
+            offset+=50
+    return sorted(found,key=lambda item:search_rank(item,keyword))
+
+
+def searchable_catalogue(folder):
+    return isinstance(folder,Folder) and folder.resource=='root' and folder.kind in ('POLSAT','PLAYERPL','SPORT')
+
+
+def collect(folder,rows,stop,progress,force=False,keyword=''):
+    if searchable_catalogue(folder):
+        return [{'material':item} for item in catalogue_search(folder,keyword,stop,progress)],0
     items=scope_items(folder,rows,stop)
     if stop.is_set():return [],0
     if not live_scope(folder):return [{'material':item} for item in items if isinstance(item,(Material,Folder))],0

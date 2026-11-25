@@ -22,6 +22,14 @@ class PlayerTests(unittest.TestCase):
  def test_public_payment_flag_does_not_claim_account_rights(self):
   row={'id':1,'title':'Kanał','type':'LIVE','payable':False}
   item=catalog.material(row);self.assertIn('ostateczne uprawnienia',item.description);self.assertEqual(item.access_status,'')
+ def test_search_uses_vod_and_live_provider_endpoints(self):
+  serial={'id':7,'type':'SERIAL','title':'Dobry serial'}
+  live={'id':8,'type':'LIVE','title':'Dobry kanał'}
+  with patch.object(catalog,'api',side_effect=[{'items':[serial]},{'items':[live]}]) as request:
+   rows=catalog.search('dobry')
+  self.assertEqual([row.title for row in rows],['Dobry serial','Dobry kanał'])
+  self.assertEqual([call.args[0] for call in request.call_args_list],['product/vod/search','product/live/search'])
+  self.assertEqual(request.call_args_list[0].kwargs['keyword'],'dobry')
  def test_naive_dates_use_warsaw_not_computer_timezone(self):
   self.assertEqual(catalog.warsaw_time('2026-10-18 12:00:00').hour,12)
   self.assertEqual(catalog.warsaw_time('2026-10-18 12:00:00').utcoffset().total_seconds(),7200)

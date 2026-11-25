@@ -7,11 +7,11 @@ import time
 from datetime import datetime,timedelta,timezone
 from urllib.parse import urlsplit,quote,urlencode
 try:
-    from .catalog import Folder,Material,CatalogError,plain_text
+    from .catalog import Folder,Material,CatalogError,plain_text,search_rank
     from .playerpl_api import request,PlayerError
     from . import playerpl_account as account
 except ImportError:
-    from catalog import Folder,Material,CatalogError,plain_text
+    from catalog import Folder,Material,CatalogError,plain_text,search_rank
     from playerpl_api import request,PlayerError
     import playerpl_account as account
 
@@ -69,6 +69,20 @@ def parse_items(rows):
             elif row.get('type') in ('VOD','EPISODE','LIVE'):out.append(material(row))
         except (KeyError,TypeError,ValueError):continue
     return out
+
+
+def search(keyword):
+    """Search Player's official VOD and live endpoints without crawling menus."""
+    keyword=plain_text(keyword).strip()
+    if len(keyword)<2:raise CatalogError('Wpisz co najmniej dwa znaki.')
+    results=[];seen=set()
+    for resource in ('product/vod/search','product/live/search'):
+        payload=api(resource,keyword=keyword,episodes='true',maxResults=50,firstResult=0)
+        if not isinstance(payload,dict) or not isinstance(payload.get('items'),list):
+            raise CatalogError('Nieprawidłowa odpowiedź wyszukiwarki Playera.')
+        for item in parse_items(payload['items']):
+            if item.id not in seen:seen.add(item.id);results.append(item)
+    return sorted(results,key=lambda item:search_rank(item,keyword))
 
 def warsaw_time(value):
     """Provider's naive dates are Warsaw wall time, regardless of computer timezone.

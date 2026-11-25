@@ -1,6 +1,6 @@
 import sys,unittest,tempfile,base64,hashlib,hmac,threading
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock,patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'addon/globalPlugins/tvpVod'))
 import polsat_account as account
 import polsat_api as api
@@ -99,13 +99,61 @@ class PolsatTests(unittest.TestCase):
   now=datetime.now(timezone.utc)
   client=Mock();client.record=record()
   def call(namespace,method,fields):
-   if method=='getTvChannels':return {'results':[{'id':'101','title':'Pierwszy'},{'id':'102','title':'Drugi'}]}
+   if method=='getTvChannels':return {'total':2,'results':[{'id':'101','title':'Pierwszy'},{'id':'102','title':'Drugi'}]}
    self.assertEqual(method,'getChannelsCurrentProgram');self.assertEqual(fields['channelIds'],['101','102'])
    return {'101':[{'title':'Film teraz','startTime':(now-timedelta(minutes=15)).isoformat(),'endTime':(now+timedelta(minutes=15)).isoformat()}]}
   client.call.side_effect=call
   with patch.object(polsat,'accessible_channels',side_effect=lambda rows,c:rows):rows=polsat.channels(client)
   self.assertTrue(rows[0][0].description.startswith('Teraz: '));self.assertIn('Film teraz',rows[0][0].description)
   self.assertIn('Brak informacji',rows[1][0].description);self.assertEqual(client.call.call_count,2)
+
+ def test_short_channel_page_continues_from_actual_length(self):
+  items=[{'id':str(i),'title':f'Kanał {i}','genres':None} for i in range(42)]
+  client=Mock();client.record=record()
+  expected_offsets=[]
+  def call(namespace,method,fields):
+   if method=='getChannelsCurrentProgram':return {}
+   offset=fields['offset']
+   expected_offsets.append(offset)
+   page=items[offset:offset+35]
+   return {'results':page,'offset':offset,'count':len(page),'total':len(items)}
+  client.call.side_effect=call
+  with patch.object(polsat,'authenticated',return_value={'statusDescription':'has access'}):
+   result=polsat.channels(client)
+  self.assertEqual(expected_offsets,[0,35])
+  self.assertEqual([item.provider_id for item,genres in result],[r['id'] for r in items])
+
+ def test_incomplete_channel_list_retries_without_caching_partial_results(self):
+  first={'total':2,'results':[{'id':'1','title':'Pierwszy'}]}
+  last={'total':2,'results':[{'id':'2','title':'Drugi'}]}
+  client=Mock();client.record=record()
+  for invalid in ({'total':2,'results':[]},first,{'total':2},dict(last,offset=0),dict(last,count=2),dict(last,total=1)):
+   polsat.clear_cache()
+   client.call.side_effect=[first,invalid,first,invalid,first,last,{}]
+   with patch.object(polsat,'authenticated',return_value={'statusDescription':'has access'}) as access:
+    with self.subTest(invalid=invalid):
+     with self.assertRaisesRegex(api.PolsatError,'F5'):polsat.channels(client)
+     access.assert_not_called()
+     self.assertEqual(len(polsat.channels(client)),2)
+
+ def test_channel_list_recovers_on_automatic_retry(self):
+  row={'id':'1','title':'Pierwszy'}
+  client=Mock();client.record=record()
+  client.call.side_effect=[{'total':1,'results':[]},{'total':1,'results':[row]},{}]
+  with patch.object(polsat,'authenticated',return_value={'statusDescription':'has access'}) as access:
+   self.assertEqual(len(polsat.channels(client)),1)
+   self.assertEqual(len(polsat.channels(client)),1)
+   access.assert_called_once()
+  self.assertEqual(client.call.call_count,3)
+
+ def test_channel_pages_without_total_end_on_empty_page(self):
+  client=Mock()
+  client.call.side_effect=[{'results':[{'id':'1','title':'Pierwszy'}]},
+                           {'results':[{'id':'2','title':'Drugi'}]},{'results':[]}]
+  channels,count=polsat._channel_catalog(client)
+  self.assertEqual([call.args[2]['offset'] for call in client.call.call_args_list],[0,1,2])
+  self.assertEqual(count,len(channels))
+  self.assertEqual(count,2)
 
  def test_access_filter_keeps_only_explicit_grants(self):
   from unittest.mock import Mock

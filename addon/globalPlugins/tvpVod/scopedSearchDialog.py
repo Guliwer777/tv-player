@@ -1,5 +1,6 @@
 """Accessible scope search; workers never touch wx or playback."""
 import threading
+import weakref
 import wx
 import ui
 from . import scopedSearch
@@ -20,7 +21,8 @@ class SearchDialog(wx.Dialog):
         self.query=wx.TextCtrl(self,name='Wyszukaj w bieżącym zakresie');layout.Add(self.query,0,wx.EXPAND|wx.ALL,8)
         self.query.Bind(wx.EVT_TEXT,self.filter)
         self.button=wx.Button(self,label='Wyszukaj');self.button.Bind(wx.EVT_BUTTON,self.search);layout.Add(self.button,0,wx.ALL,8)
-        self.status=wx.StaticText(self,label='Ramówki zostaną pobrane po wybraniu Wyszukaj. Pierwsze pobranie wielu stacji może potrwać kilka minut.')
+        source='Wyniki są pobierane z katalogu wybranej usługi.' if scopedSearch.searchable_catalogue(folder) else 'Ramówki zostaną pobrane po wybraniu Wyszukaj. Pierwsze pobranie wielu stacji może potrwać kilka minut.'
+        self.status=wx.StaticText(self,label=source)
         layout.Add(self.status,0,wx.EXPAND|wx.ALL,8)
         self.list=wx.ListBox(self,name='Wyniki wyszukiwania');layout.Add(self.list,1,wx.EXPAND|wx.ALL,8)
         self.list.Bind(wx.EVT_CONTEXT_MENU,self.context)
@@ -40,6 +42,8 @@ class SearchDialog(wx.Dialog):
             schedule_shortcut(self.owner,self.selected(),planning_mode(event))
         elif code==wx.WXK_F5:self.search(force=True)
         elif code==wx.WXK_ESCAPE:self.Close()
+        elif code==wx.WXK_BACK and self.FindFocus()==self.list and not event.ControlDown() and not event.AltDown():
+            self.Close()
         elif code==getattr(wx,'WXK_WINDOWS_MENU',-1) or code==wx.WXK_F10 and event.ShiftDown():
             if self.FindFocus()==self.list:self.context(None)
             else:event.Skip()
@@ -54,11 +58,12 @@ class SearchDialog(wx.Dialog):
         if self.busy:return
         if not self.query.GetValue().strip():ui.message('Wpisz szukany tytuł lub kanał.');return
         if self.loaded and not force:self.filter();self.list.SetFocus();return
-        self.busy=True;self.button.Disable();self.status.SetLabel('Pobieranie listy stacji i ramówek…')
+        self.busy=True;self.button.Disable()
+        self.status.SetLabel('Przeszukiwanie katalogu usługi…' if scopedSearch.searchable_catalogue(self.folder) else 'Pobieranie listy stacji i ramówek…')
         def progress(done,total,rows,failed):wx.CallAfter(self.progress,done,total,rows,failed)
         def worker():
             try:
-                rows,failed=scopedSearch.collect(self.folder,self.source_rows,self.stop,progress,force=force);error=''
+                rows,failed=scopedSearch.collect(self.folder,self.source_rows,self.stop,progress,force=force,keyword=self.query.GetValue());error=''
             except Exception:rows=[];failed=0;error='Nie udało się pobrać danych tego zakresu. Możesz ponowić wyszukiwanie.'
             wx.CallAfter(self.complete,rows,failed,error)
         threading.Thread(target=worker,daemon=True).start()
@@ -66,13 +71,21 @@ class SearchDialog(wx.Dialog):
     def progress(self,done,total,rows,failed):
         if not self.alive:return
         self.rows=rows;self.failed=failed;self.filter()
-        self.status.SetLabel(f'Pobrano {done} z {total} stacji. Brak danych lub błąd: {failed}. Wyniki są częściowe do zakończenia pobierania.')
+        if total:
+            self.status.SetLabel(f'Pobrano {done} z {total} stacji. Brak danych lub błąd: {failed}. Wyniki są częściowe do zakończenia pobierania.')
+        else:self.status.SetLabel(f'Przeszukano {done} części katalogu. Wyniki pojawią się po zakończeniu.')
 
     def complete(self,rows,failed,error):
         if not self.alive:return
         self.rows=rows;self.failed=failed;self.loaded=not bool(error);self.busy=False;self.button.Enable();self.filter()
-        self.status.SetLabel(error or f'Zakończono. Wyników: {len(self.visible)}. Stacje bez ramówki lub z błędem: {failed}. Zakres do siedmiu dni, według danych dostawcy.')
-        ui.message(error or f'Wyszukiwanie zakończone. Wyników: {len(self.visible)}. Stacje bez danych: {failed}.')
+        if scopedSearch.searchable_catalogue(self.folder):
+            message=error or f'Zakończono. Wyników: {len(self.visible)}.'
+            spoken=error or f'Wyszukiwanie zakończone. Wyników: {len(self.visible)}.'
+        else:
+            message=error or f'Zakończono. Wyników: {len(self.visible)}. Stacje bez ramówki lub z błędem: {failed}. Zakres do siedmiu dni, według danych dostawcy.'
+            spoken=error or f'Wyszukiwanie zakończone. Wyników: {len(self.visible)}. Stacje bez danych: {failed}.'
+        self.status.SetLabel(message)
+        ui.message(spoken)
         # Keep typing/focus intact while the background download completes.
 
     def filter(self,event=None):
@@ -94,16 +107,44 @@ class SearchDialog(wx.Dialog):
         if row and 'start' in row:self.owner.schedule_event(row['material'],row,mode)
         else:ui.message('Wybierz audycję z określonym terminem.')
 
+    def results_frame(self):
+        items = [row['material'] for row in self.visible]
+        heading = 'Wyniki wyszukiwania: ' + self.query.GetValue().strip()
+        return items, None, 0, heading, self.list.GetSelection()
+
+    def play_result(self, row):
+        material = row['material']
+        context = self.owner.navigation_context()
+        if 'start' not in row:
+            from .state import pack_frame
+            context['history'].append(context['current'])
+            context['current'] = pack_frame(*self.results_frame())
+        self.owner.on_play(material, navigation_context=context)
+        playback = self.owner.playback
+        if playback and playback.alive and (playback.material.kind, playback.material.id) == (material.kind, material.id):
+            playback.search_origin = (weakref.ref(self), row)
+
+    def focus_result(self, row):
+        if not self.alive or row not in self.visible:
+            return False
+        self.list.SetSelection(self.visible.index(row))
+        self.Show()
+        self.Raise()
+        self.list.SetFocus()
+        return True
+
     def activate(self):
         row=self.selected()
         if not row:return
         if 'start' in row:self.context(None);return
         material=row['material']
         if isinstance(material,Folder):
-            self.owner.remember();self.owner.current_folder=material;self.owner.offset=0;self.owner.heading=material.title
+            self.owner.remember()
+            self.owner.history.append(self.results_frame())
+            self.owner.current_folder=material;self.owner.offset=0;self.owner.heading=material.title
             from .catalog import browse
             self.owner.run_task(lambda:browse(material));self.Close()
-        else:self.owner.on_play(material)
+        else:self.play_result(row)
 
     def context(self,event):
         row=self.selected();menu=wx.Menu()
@@ -114,7 +155,7 @@ class SearchDialog(wx.Dialog):
         if row:
             action('Dodaj do ulubionych',lambda:self.owner.add_favorite(row['material']))
             if row['material'].kind in ('CANAL_LIVE','POLSAT_LIVE','PLAYERPL_LIVE') or row['material'].kind=='LIVE' and not row['material'].start:
-                action('Odtwórz kanał teraz',lambda:self.owner.on_play(row['material']))
+                action('Odtwórz kanał teraz',lambda:self.play_result(row))
             if 'start' in row:
                 action('Przypomnij o rozpoczęciu (Ctrl+R)',lambda:self.schedule('notify'))
                 action('Odtwórz automatycznie (Ctrl+Shift+R)',lambda:self.schedule('play'))

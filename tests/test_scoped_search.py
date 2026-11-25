@@ -1,6 +1,10 @@
-import importlib,sys,types,unittest,threading
+import importlib,sys,types,unittest,threading,weakref
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock,patch
+if __package__:
+ from .test_commands import method
+else:
+ from test_commands import method
 from datetime import datetime,timezone
 package=sys.modules.setdefault('tvpVod',types.ModuleType('tvpVod'))
 package.__path__=[str(Path(__file__).resolve().parents[1]/'addon/globalPlugins/tvpVod')]
@@ -26,6 +30,78 @@ class ScopedTests(unittest.TestCase):
   with patch.object(m,'browse',side_effect=[([self.channel(1,'Jeden')],True),([self.channel(2,'Dwa')],False)]) as get:
    self.assertEqual(len(m.all_items(f,self.stop)),2)
    self.assertEqual(get.call_args_list[1].args[1],50)
+ def test_provider_catalogue_search_walks_folders_and_pages(self):
+  root=Folder(0,'Sport','SPORT','root');category=Folder(1,'Filmy','SPORT','category:1')
+  first=self.channel(10,'Inny materiał');wanted=self.channel(11,'Dobry film')
+  with patch.object(m,'browse',side_effect=[([category],False),([first],True),([wanted],False)]) as get:
+   rows=m.catalogue_search(root,'dobry',self.stop,lambda *args:None)
+  self.assertEqual(rows,[wanted])
+  self.assertEqual(get.call_args_list[2].args[1],50)
+ def test_provider_catalogue_search_stops_without_more_requests(self):
+  root=Folder(0,'Player','PLAYERPL','root');self.stop.set()
+  with patch.object(m,'browse') as get:self.assertEqual(m.catalogue_search(root,'film',self.stop,lambda *args:None),[])
+  get.assert_not_called()
+ def test_polsat_catalogue_search_uses_provider_search(self):
+  root=Folder(0,'Polsat','POLSAT','root');wanted=self.channel(11,'Dobry film')
+  polsat=importlib.import_module('tvpVod.polsat')
+  with patch.object(polsat,'search',return_value=[wanted]) as search:
+   self.assertEqual(m.catalogue_search(root,'dobry',self.stop,lambda *args:None),[wanted])
+  search.assert_called_once_with('dobry')
+ def test_player_catalogue_search_uses_provider_search(self):
+  root=Folder(0,'Player','PLAYERPL','root');wanted=self.channel(12,'Dobry film')
+  player=importlib.import_module('tvpVod.playerpl')
+  with patch.object(player,'search',return_value=[wanted]) as search:
+   self.assertEqual(m.catalogue_search(root,'dobry',self.stop,lambda *args:None),[wanted])
+  search.assert_called_once_with('dobry')
+ def test_root_provider_is_a_searchable_catalogue(self):
+  self.assertTrue(m.searchable_catalogue(Folder(0,'Sport','SPORT','root')))
+  self.assertFalse(m.searchable_catalogue(Folder(0,'CANAL+','CANAL','root')))
+  self.assertFalse(m.searchable_catalogue(Folder(0,'Kanały','POLSAT','live')))
+
+ def test_player_returns_to_selected_result_and_keeps_a_saved_copy(self):
+  state=importlib.import_module('tvpVod.state')
+  films=[Material(i,title,'','https://player.pl/','PLAYERPL',False)
+         for i,title in enumerate(('Film A','Film B'),1)]
+  search=Mock()
+  search.visible=[{'material':film} for film in films]
+  search.query.GetValue.return_value=' Film '
+  search.list.GetSelection.return_value=1
+  search.results_frame=lambda:method('scopedSearchDialog.py','SearchDialog','results_frame',{})(search)
+  search.focus_result=lambda row:method('scopedSearchDialog.py','SearchDialog','focus_result',{})(search,row)
+  menu=state.pack_frame([state.MenuEntry('Wyszukaj','playerpl-search')],None,0,'Player',0)
+  search.owner.navigation_context.return_value={'current':menu,'history':[]}
+  playback=search.owner.playback
+  playback.material=films[1]
+  play=method('scopedSearchDialog.py','SearchDialog','play_result',{'__package__':'tvpVod','weakref':weakref})
+  play(search,search.visible[1])
+  context=search.owner.on_play.call_args.kwargs['navigation_context']
+  self.assertEqual(state.unpack_frame(context['current']),(films,None,0,'Wyniki wyszukiwania: Film',1))
+  self.assertEqual(context['history'],[menu])
+  navigate=method('playbackDialog.py','PlaybackDialog','return_to_catalog',{})
+  navigate(playback)
+  search.list.SetSelection.assert_called_once_with(1)
+  search.list.SetFocus.assert_called_once()
+  parent=playback.GetParent.return_value
+  parent.restore_playback_context.assert_not_called()
+  search.alive=False
+  navigate(playback)
+  parent.restore_playback_context.assert_called_once_with(playback)
+  navigate(playback,home=True)
+  parent.go_home.assert_called_once()
+
+ def test_opening_series_from_results_includes_search_in_back_history(self):
+  series=Folder(5,'Serial','PLAYERPL','serial:5')
+  search=Mock()
+  search.selected.return_value={'material':series}
+  frame=([series],None,0,'Wyniki wyszukiwania: serial',0)
+  search.results_frame.return_value=frame
+  search.owner.history=[]
+  activate=method('scopedSearchDialog.py','SearchDialog','activate',{'Folder':Folder,'__package__':'tvpVod'})
+  activate(search)
+  search.owner.remember.assert_called_once()
+  self.assertEqual(search.owner.history,[frame])
+  self.assertEqual(search.owner.current_folder,series)
+
  def test_matches_title_subtitle_and_channel_without_case(self):
   rows=[{'title':'Mecz','subtitle':'Polska Anglia','material':self.channel(1,'TVP Sport')},
         {'title':'Film','material':self.channel(2,'TVP 1')}]
